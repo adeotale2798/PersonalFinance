@@ -188,6 +188,8 @@ const overview = {
   expense_breakdown: [{ name: "Construction", value: 2100000 }, { name: "Household", value: 256000 }, { name: "EMI", value: 364000 }, { name: "Food", value: 168000 }],
   allocation: [{ name: "Bank", value: 3250500 }, { name: "Cash", value: 61200 }, { name: "Savings", value: 970000 }, { name: "PF/PPF", value: 1690000 }, { name: "Investments", value: 1314500 }, { name: "Property", value: 6545000 }, { name: "Receivables", value: 225000 }],
   attention: [{ type: "insurance_renewal", label: "Creta Motor Insurance renewal coming up", value: 28000, path: "/insurance" }, { type: "unpaid_rent", label: "Outstanding rent to collect", value: 28000, path: "/rental" }],
+  budget_alerts: [{ id: "budget-near:demo-budget-food", label: "Food is nearing its plan", detail: "86% used · ₹3,920 remains", value: 3920, path: "/budgets", severity: "warning" }],
+  next_actions: [{ id: "commitment:home-loan-emi", label: "Home loan EMI", detail: "Godrej Woodsville · due this month", value: 54570, due_date: dateInMonth(0, 4), path: "/loans", severity: "critical", source_collection: "loans", source_id: "loan-home" }],
   recent_activity: [],
   cash_position: { available_now: 3311700, expected_receivables: 253000, upcoming_obligations: 500000 },
   liability_allocation: [{ name: "Loans", value: 5861751 }, { name: "Borrowings", value: 500000 }],
@@ -263,6 +265,7 @@ let demoBudgets = [
 ];
 let demoReconciliations = [];
 let demoRecurring = [];
+const demoPlanningActionStates = new Map();
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -523,6 +526,18 @@ function enrichParty(party) {
 
 function responseForGet(path, query) {
   if (path === "/sitewalkthrough/status") return { enabled: demoWalkthroughEnabled };
+  if (path === "/dashboard/overview") {
+    const result = clone(staticResponses[path]);
+    const today = new Date().toISOString().slice(0, 10);
+    const visible = (item) => {
+      const state = demoPlanningActionStates.get(item.id);
+      return state?.status !== "RESOLVED" && !(state?.status === "SNOOZED" && state.snoozed_until > today);
+    };
+    result.budget_alerts = (result.budget_alerts || []).filter(visible);
+    result.next_actions = (result.next_actions || []).filter(visible);
+    return result;
+  }
+  if (path === "/networth/history") return clone(netWorthHistory);
   if (path === "/recurring") return clone(recurringOverview());
   if (path === "/calendar") {
     const year = Number(query.get("year")) || new Date().getFullYear();
@@ -742,6 +757,21 @@ function responseForGet(path, query) {
 
 function mutate(config, path, method) {
   const body = typeof config.data === "string" ? (() => { try { return JSON.parse(config.data); } catch (_) { return {}; } })() : (config.data || {});
+  const planningAction = path.match(/^\/planning\/actions\/([^/]+)$/);
+  if (method === "post" && planningAction) {
+    const state = { status: body.action === "postpone" ? "SNOOZED" : "RESOLVED", snoozed_until: body.snoozed_until || null };
+    demoPlanningActionStates.set(decodeURIComponent(planningAction[1]), state);
+    return { status: state.status };
+  }
+  if (method === "post" && path === "/networth/snapshot") {
+    const date = new Date().toISOString().slice(0, 10);
+    const snapshot = { date, net_worth: netWorth.net_worth, assets: netWorth.total_assets, liabilities: netWorth.total_liabilities, source: "manual" };
+    const existing = netWorthHistory.items.findIndex((item) => item.date === date);
+    if (existing >= 0) netWorthHistory.items[existing] = snapshot;
+    else netWorthHistory.items.push(snapshot);
+    netWorthHistory.items.sort((left, right) => left.date.localeCompare(right.date));
+    return { date, net_worth: snapshot.net_worth, total_assets: snapshot.assets, total_liabilities: snapshot.liabilities, source: snapshot.source };
+  }
   if (method === "post" && path === "/debt-payoff/plan") {
     const loans = data.loans.filter((loan) => !["closed", "paid", "paid off", "paid_off"].includes(String(loan.status || "Open").trim().toLowerCase()));
     const startDate = body.start_date || new Date().toISOString().slice(0, 10);

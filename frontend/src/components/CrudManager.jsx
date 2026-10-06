@@ -5,10 +5,19 @@ import api, { apiError } from "../lib/api";
 import { useFetch } from "../lib/useFetch";
 import { inr, fmtDate, indianNumber, moneyValue, dateInputValue, dateToISO } from "../lib/format";
 
-function FieldInput({ f, value, onChange }) {
+function FieldInput({ f, value, onChange, form }) {
   const common = { value: value ?? "", onChange: (e) => onChange(f.key, e.target.value), "data-testid": `field-${f.key}` };
   if (f.type === "select")
-    return <Select {...common} onChange={async (e) => { if (e.target.value === "__add_option__") { const created = await f.onAddOption?.(); if (created) onChange(f.key, created.value ?? created); return; } onChange(f.key, e.target.value); }}><option value="">Select…</option>{(f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}{f.onAddOption && <option value="__add_option__">+ Add party…</option>}</Select>;
+    return <Select {...common} onChange={async (e) => {
+      const nextValue = e.target.value;
+      if (nextValue === "__add_option__") {
+        const created = await f.onAddOption?.();
+        if (created) onChange(f.key, created.value ?? created);
+        return;
+      }
+      onChange(f.key, nextValue);
+      f.onValueChange?.(nextValue, form, onChange);
+    }}><option value="">Select…</option>{(f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}{f.onAddOption && <option value="__add_option__">+ Add party…</option>}</Select>;
   if (f.type === "textarea") return <Textarea {...common} placeholder={f.placeholder} />;
   if (f.type === "money") return <Input inputMode="decimal" {...common} value={indianNumber(value)} onChange={(e) => onChange(f.key, moneyValue(e.target.value))} placeholder={f.placeholder || "0"} />;
   if (f.type === "number") return <Input type="number" step="any" {...common} placeholder={f.placeholder || "0"} />;
@@ -33,7 +42,16 @@ export default function CrudManager({
 
   const openAdd = () => { setEditing(null); setForm(fields.reduce((a, f) => (f.default != null ? { ...a, [f.key]: f.default } : a), {})); setFormErr(""); setOpen(true); };
   useEffect(() => { if (openSignal) openAdd(); }, [openSignal]);
-  const openEdit = (row) => { setEditing(row); setForm({ ...row }); setFormErr(""); setOpen(true); };
+  const openEdit = (row) => {
+    setEditing(row);
+    const values = { ...row };
+    fields.forEach((field) => {
+      if (field.editValue) values[field.key] = field.editValue(row);
+    });
+    setForm(values);
+    setFormErr("");
+    setOpen(true);
+  };
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -134,7 +152,7 @@ export default function CrudManager({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {fields.filter((f) => !f.visible || f.visible(form)).map((f) => (
             <Field key={f.key} label={`${f.label}${f.required ? " *" : ""}${f.type === "date" ? ` (${localStorage.getItem("nivara_date_format") || "DD-MM-YYYY"})` : ""}`} className={f.full ? "sm:col-span-2" : ""}>
-              <FieldInput f={f} value={form[f.key]} onChange={set} />
+              <FieldInput f={f} value={form[f.key]} onChange={set} form={form} />
             </Field>
           ))}
         </div>

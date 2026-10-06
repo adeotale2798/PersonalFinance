@@ -99,6 +99,12 @@ def test_login_protection_and_full_dashboard_calculations(client, admin):
     assert snapshot.json()["net_worth"] == pytest.approx(data["net_worth"])
     history = admin.get("/networth/history")
     assert history.status_code == 200 and history.json()["items"]
+    recorded = admin.post("/networth/snapshot")
+    assert recorded.status_code == 200, recorded.text
+    assert recorded.json()["source"] == "manual"
+    latest = admin.get("/networth/history").json()["items"][-1]
+    assert latest["date"] == recorded.json()["date"]
+    assert latest["source"] == "manual"
 
 
 def test_household_account_sharing_read_use_and_revocation(client, admin):
@@ -637,9 +643,20 @@ def test_category_budgets_include_posted_pending_and_rollover(admin):
     assert item["pending"] == 5
     assert item["remaining"] == 5
     dashboard = admin.get("/dashboard/overview").json()
-    assert any(row["id"] == f"budget-near:{item['id']}" for row in dashboard["budget_alerts"])
+    budget_alert = next(row for row in dashboard["budget_alerts"] if row["id"] == f"budget-near:{item['id']}")
     pending_action = next(row for row in dashboard["next_actions"] if row["id"] == "pending-expenses")
     assert pending_action["value"] == 5 and pending_action["path"] == "/expenses"
+    postponed = admin.post(f"/planning/actions/{budget_alert['id']}", json={
+        "action": "postpone", "snoozed_until": NEXT_WEEK,
+    })
+    assert postponed.status_code == 200, postponed.text
+    postponed_overview = admin.get("/dashboard/overview").json()
+    assert all(row["id"] != budget_alert["id"] for row in postponed_overview["budget_alerts"])
+    assert all(row["id"] != budget_alert["id"] for row in postponed_overview["next_actions"])
+    resolved = admin.post("/planning/actions/pending-expenses", json={"action": "resolve"})
+    assert resolved.status_code == 200, resolved.text
+    after_resolve = admin.get("/dashboard/overview").json()
+    assert all(row["id"] != "pending-expenses" for row in after_resolve["next_actions"])
 
     updated = admin.post("/budgets", json={
         "month": month, "category": category, "amount": 55,

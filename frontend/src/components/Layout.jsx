@@ -11,6 +11,7 @@ import QuickAdd from "./QuickAdd";
 import { Button } from "./ui";
 import api, { apiError } from "../lib/api";
 import { inr } from "../lib/format";
+import { useFetch } from "../lib/useFetch";
 
 const NAV = [
   {
@@ -63,8 +64,8 @@ const NAV = [
 
 const MOBILE = [
   { name: "Home", path: "/", icon: LayoutDashboard, tid: "mobile-nav-home" },
-  { name: "Calendar", path: "/calendar", icon: CalendarDays, tid: "mobile-nav-calendar" },
   { name: "Daily", path: "/daily-spending", icon: CreditCard, tid: "mobile-nav-daily" },
+  { name: "Next", path: "/planner", icon: Target, tid: "mobile-nav-next" },
   { name: "Accounts", path: "/accounts", icon: Wallet, tid: "mobile-nav-accounts" },
   { name: "More", icon: Menu, tid: "mobile-nav-more" },
 ];
@@ -140,10 +141,22 @@ function HeaderClock() {
 function GlobalSearch() {
   const nav = useNavigate();
   const { user } = useAuth();
+  const searchRef = useRef(null);
   const inputRef = useRef(null);
   const mobileInputRef = useRef(null);
   const [query, setQuery] = useState(""), [items, setItems] = useState([]), [open, setOpen] = useState(false), [active, setActive] = useState(0);
   const [loading, setLoading] = useState(false), [error, setError] = useState(""), [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    const closeOnOutsideClick = (event) => {
+      if (!searchRef.current?.contains(event.target)) {
+        setOpen(false);
+        setMobileOpen(false);
+      }
+
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, []);
   const navGroups = user?.role === "HOUSEHOLD_USER" ? HOUSEHOLD_NAV : NAV;
   const moduleItems = navGroups.flatMap((group) => group.items)
     .filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase()))
@@ -167,13 +180,11 @@ function GlobalSearch() {
         if (!cancelled) {
           setItems(Array.isArray(response.data.items) ? response.data.items : []);
           setActive(0);
-          setOpen(true);
         }
       } catch (requestError) {
         if (!cancelled) {
           setItems([]);
           setError(apiError(requestError));
-          setOpen(true);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -195,7 +206,7 @@ function GlobalSearch() {
     {error && <p className="px-3 py-3 text-center text-xs text-expense" role="alert">{error}</p>}
     {!loading && !error && !searchItems.length && <p className="px-3 py-5 text-center text-sm text-subink">No matching sections or records for “{query.trim()}”.</p>}
   </div>;
-  return <>
+  return <div ref={searchRef} className="contents">
     <div className="relative hidden w-[clamp(10.5rem,19vw,18rem)] shrink-0 min-[981px]:block">
       <label className="sr-only" htmlFor="financial-search">Search financial records</label>
       <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
@@ -209,7 +220,25 @@ function GlobalSearch() {
       <div className="relative"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" /><input ref={mobileInputRef} id="financial-search-mobile" role="combobox" aria-expanded={results} aria-controls="financial-search-mobile-results" aria-autocomplete="list" value={query} onKeyDown={keyDown} onChange={(event) => { setQuery(event.target.value); setItems([]); setActive(0); setOpen(true); }} placeholder="Search accounts, transactions, projects…" className="h-10 w-full rounded-xl border border-line bg-white pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-brand/20" /></div>
       {resultPanel("financial-search-mobile-results", "relative mt-2 top-auto")}
     </div>}
-  </>;
+  </div>;
+}
+
+function MobileNextAction() {
+  const nav = useNavigate();
+  const location = useLocation();
+  const { data, loading, error } = useFetch("/dashboard/overview");
+  const priorities = [...(data?.budget_alerts || []), ...(data?.next_actions || [])]
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index)
+    .sort((left, right) => ({ critical: 0, warning: 1, info: 2 }[left.severity] - { critical: 0, warning: 1, info: 2 }[right.severity])
+      || (left.due_date || "9999-99-99").localeCompare(right.due_date || "9999-99-99"));
+  const next = priorities[0];
+  const destination = next?.path || "/planner";
+  const active = location.pathname === destination || (destination !== "/" && location.pathname.startsWith(`${destination}/`));
+  return <button type="button" onClick={() => nav(destination)} disabled={loading} data-testid="mobile-nav-next"
+    aria-label={loading ? "Finding your next priority" : next ? `Open next priority: ${next.label}` : error ? "Priorities unavailable; open financial planner" : "Open financial planner; no current priority"}
+    className={cx("flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg text-[10px] font-semibold", active ? "text-brand" : "text-faint")}>
+    <Target size={20} /><span>Next</span>
+  </button>;
 }
 
 function Notifications() {
@@ -372,7 +401,7 @@ export default function Layout({ children }) {
 
       {/* Mobile bottom nav */}
       <div className="app-mobile-nav mobile-safe-bottom min-[981px]:hidden fixed bottom-0 left-0 right-0 bg-surface/95 backdrop-blur-lg border-t border-line z-30 flex items-center justify-around px-2">
-        {mobileItems.map((m) => m.path ? (
+        {mobileItems.map((m) => m.tid === "mobile-nav-next" ? <MobileNextAction key={m.tid} /> : m.path ? (
           <NavLink key={m.path} to={m.path} end={m.path === "/"} data-testid={m.tid}
             className={({ isActive }) => cx("flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg text-[10px] font-semibold",
               isActive ? "text-brand" : "text-faint")}>

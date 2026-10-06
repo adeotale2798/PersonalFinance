@@ -11,7 +11,7 @@ const TYPES = [
   { key: "BORROWED", label: "Borrow", icon: Landmark, tone: "text-amber" },
 ];
 
-export default function QuickAdd({ open, onClose, onDone }) {
+export default function QuickAdd({ open, onClose, onDone, initialType = "EXPENSE" }) {
   const [type, setType] = useState("EXPENSE");
   const [form, setForm] = useState({ date: todayISO() });
   const [accounts, setAccounts] = useState([]);
@@ -25,15 +25,38 @@ export default function QuickAdd({ open, onClose, onDone }) {
 
   useEffect(() => {
     if (!open) return;
-    setForm({ date: todayISO() }); setError(""); setType("EXPENSE"); setProof(null);
+    setForm({ date: todayISO() }); setError(""); setType(initialType); setProof(null);
     Promise.all([
       api.get("/accounts").then((r) => setAccounts(r.data)).catch(() => {}),
       api.get("/settings").then((r) => setSettings(r.data)).catch(() => {}),
       api.get("/projects").then((r) => setProjects(r.data)).catch(() => {}),
     ]);
-  }, [open]);
+  }, [open, initialType]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const chooseType = (nextType) => {
+    setType(nextType);
+    setForm((current) => ({
+      ...current,
+      account_id: nextType === "EXPENSE" ? "" : current.account_id === "__cash__" ? "" : current.account_id,
+    }));
+  };
+  const chooseAccount = (accountId) => {
+    setForm((current) => ({
+      ...current,
+      account_id: accountId,
+      ...(accountId === "__cash__" ? { payment_mode: "Cash" } :
+        current.account_id === "__cash__" ? { payment_mode: "" } : {}),
+    }));
+  };
+  const choosePaymentMode = (paymentMode) => {
+    setForm((current) => ({
+      ...current,
+      payment_mode: paymentMode,
+      ...(type === "EXPENSE" && paymentMode === "Cash" ? { account_id: "__cash__" } :
+        current.account_id === "__cash__" && paymentMode !== "Cash" ? { account_id: "" } : {}),
+    }));
+  };
   const chooseProject = async (projectId) => {
     set("project_id", projectId); set("party", "");
     if (!projectId) return setParties([]);
@@ -48,13 +71,13 @@ export default function QuickAdd({ open, onClose, onDone }) {
       if (type === "INCOME" || type === "EXPENSE") {
         await api.post("/transactions", {
           type, amount, date: form.date,
-          account_id: form.account_id || null,
+          account_id: form.account_id === "__cash__" ? null : form.account_id || null,
           source: type === "INCOME" ? form.category : undefined,
           category: type === "EXPENSE" ? form.category : undefined,
           project_id: form.project_id || null,
           scope: form.project_id ? "PROJECT" : "PERSONAL",
           party: form.party || undefined,
-          payment_mode: form.payment_mode || "Cash",
+          payment_mode: form.account_id === "__cash__" ? "Cash" : form.payment_mode || "Cash",
           utr_number: form.payment_mode === "UPI" ? form.utr_number || form.transaction_reference || null : null,
           description: form.description || "",
           source_image_id: form.source_image_id || null,
@@ -97,7 +120,7 @@ export default function QuickAdd({ open, onClose, onDone }) {
       <div className="quick-add-modal-layout">
         <div className="grid grid-cols-4 gap-2 mb-5">
           {TYPES.map((t) => (
-            <button key={t.key} onClick={() => setType(t.key)} data-testid={`quick-type-${t.key}`}
+            <button key={t.key} onClick={() => chooseType(t.key)} data-testid={`quick-type-${t.key}`}
               className={cx("flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-semibold transition-all",
                 type === t.key ? "border-brand bg-brand-light text-brand-dark" : "border-line text-subink hover:bg-muted")}>
               <t.icon size={18} className={type === t.key ? "text-brand" : t.tone} />
@@ -127,10 +150,10 @@ export default function QuickAdd({ open, onClose, onDone }) {
                 </Select>
               </Field>
               <Field label="Account">
-                <Select value={form.account_id || ""} onChange={(e) => set("account_id", e.target.value)} data-testid="quick-account">
+                <Select value={form.account_id || ""} onChange={(e) => chooseAccount(e.target.value)} data-testid="quick-account">
                   <option value="">Select…</option>
-                  <option value="CASH">Cash (in hand)</option>
-                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {type === "EXPENSE" && <option value="__cash__">Cash (no account deduction)</option>}
+                  {accounts.filter((account) => type !== "EXPENSE" || account.type !== "CASH").map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </Select>
               </Field>
             </div>
@@ -141,7 +164,7 @@ export default function QuickAdd({ open, onClose, onDone }) {
               </Select>
             </Field>
             {form.project_id && type === "EXPENSE" && <Field label="Paid to (party)"><Select value={form.party || ""} onChange={(e) => set("party", e.target.value)}><option value="">Select…</option>{parties.map((party) => <option key={party.id} value={party.name}>{party.name}</option>)}</Select></Field>}
-            <Field label="Paid via"><Select value={form.payment_mode || ""} onChange={(e) => set("payment_mode", e.target.value)}><option value="">Select…</option>{(settings?.payment_methods || ["Cash", "UPI"]).map((mode) => <option key={mode}>{mode}</option>)}</Select></Field>
+            <Field label="Paid via"><Select value={form.payment_mode || ""} onChange={(e) => choosePaymentMode(e.target.value)} data-testid="quick-payment-mode"><option value="">Select…</option>{(settings?.payment_methods || ["Cash", "UPI"]).map((mode) => <option key={mode}>{mode}</option>)}</Select></Field>
             {form.payment_mode === "UPI" && <Field label="UTR Number"><Input value={form.utr_number || form.transaction_reference || ""} onChange={(e) => { set("utr_number", e.target.value); set("transaction_reference", e.target.value); }} /></Field>}
           </>
         )}

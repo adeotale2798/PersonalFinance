@@ -224,6 +224,8 @@ html, body { overflow-x: clip; }
 .wealth-command-panel::before { background: linear-gradient(145deg, rgba(255,255,255,.085), rgba(255,255,255,0) 52%); }
 .wealth-command-panel::after { opacity: 1; background: radial-gradient(circle at 90% 10%, rgba(113,131,255,.11), transparent 18rem); }
 .wealth-command-panel .wealth-muted { color: #aebbd5; }
+.wealth-command-panel::before,
+.wealth-command-panel::after { display: none; }
 .wealth-command-panel .wealth-link { color: #84e3ea; font-weight: 700; }
 .wealth-command-panel .wealth-link:hover { color: white; }
 .wealth-command-panel .wealth-action { border: 1px solid rgba(203,215,255,.2); color: #f4f7ff; background: rgba(255,255,255,.09); box-shadow: inset 0 1px rgba(255,255,255,.13); }
@@ -233,6 +235,19 @@ html, body { overflow-x: clip; }
 .wealth-command-panel .wealth-label { color: #b5c0d7; }
 .wealth-command-panel .wealth-value { color: #f7f9ff; }
 .wealth-command-panel .wealth-stat:hover { border-color: rgba(124,225,234,.55); background: rgba(255,255,255,.13); }
+.wealth-key-stats .wealth-stat { min-width: 0; padding: .7rem .8rem; }
+.wealth-key-stats .wealth-value { overflow-wrap: anywhere; font-size: clamp(.9rem, 1.7vw, 1.3rem); }
+.wealth-history-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: #53617b; font-size: .65rem; font-weight: 800; }
+.wealth-history-sample { flex: none; border-radius: 999px; background: #eef0ff; padding: .2rem .5rem; color: #4b5be5; font-size: .58rem; }
+.wealth-history-origin { flex: none; border-radius: 999px; background: #e9f8f6; padding: .2rem .5rem; color: #087e77; font-size: .58rem; }
+.wealth-snapshot-button { flex: none; border-radius: 999px; background: #e9f8f6; padding: .25rem .55rem; color: #087e77; font-size: .58rem; font-weight: 800; transition: background .15s ease; }
+.wealth-snapshot-button:hover:not(:disabled) { background: #d7f2ee; }
+.wealth-snapshot-button:disabled { cursor: wait; opacity: .65; }
+.wealth-history-cadence { margin-top: .1rem; color: #8490a5; font-size: .55rem; line-height: 1.3; }
+.wealth-chart-area { height: calc(100% - 2rem); min-height: 0; }
+.wealth-history-sparse { display: flex; height: calc(100% - 2rem); flex-direction: column; justify-content: center; gap: .3rem; padding: .25rem .5rem; color: #74819a; text-align: center; }
+.wealth-history-sparse strong { color: #34425d; font-size: .73rem; }
+.wealth-history-sparse span { font-size: .63rem; line-height: 1.4; }
 .wealth-history-empty { height: 100%; min-height: 170px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .45rem; padding: 1rem; text-align: center; }
 .wealth-history-empty__icon { width: 2.5rem; height: 2.5rem; display: grid; place-items: center; border-radius: .85rem; color: #4b5be5; background: #edf0ff; }
 .wealth-history-empty strong { margin-top: .2rem; color: #26334e; font-size: .82rem; }
@@ -244,7 +259,7 @@ html, body { overflow-x: clip; }
 .wealth-history-single__date { color: #34425d; font-size: .88rem; font-weight: 700; }
 .wealth-history-single__value { grid-column: 2; grid-row: 1 / span 2; max-width: 100%; overflow-wrap: anywhere; color: #26365d; font-size: clamp(1.25rem, 3vw, 2rem); font-weight: 800; text-align: right; }
 .wealth-history-single__hint { grid-column: 1 / -1; margin-top: .45rem; color: #8792a8; font-size: .68rem; line-height: 1.45; }
-.wealth-history-loading, .wealth-history-error { height: 100%; min-height: 170px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .45rem; padding: 1rem; color: #74819a; font-size: .72rem; text-align: center; }
+.wealth-history-loading, .wealth-history-error { height: calc(100% - 2rem); min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .45rem; padding: .25rem; color: #74819a; font-size: .72rem; text-align: center; }
 .wealth-history-error strong { color: #526078; }
 .wealth-history-error button { margin-top: .25rem; color: #4b5be5; font-weight: 800; }
 .login-visual { margin-left: 0; }
@@ -300,84 +315,6 @@ html, body { overflow-x: clip; }
     radial-gradient(ellipse at 96% 0%, rgba(76,213,221,.12), transparent 19rem),
     linear-gradient(115deg, rgba(255,255,255,.98), rgba(244,246,255,.96) 63%, rgba(236,249,255,.96));
 }
-.wealth-command-panel {
-  perspective: 1000px;
-  isolation: isolate;
-}
-.wealth-orbit {
-  position: absolute;
-  z-index: 0;
-  top: -2.4rem;
-  right: 13%;
-  width: 14rem;
-  height: 14rem;
-  perspective: 900px;
-  pointer-events: none;
-  opacity: .82;
-  filter: drop-shadow(0 24px 32px rgba(1,8,30,.36));
-  animation: wealth-orbit-float 8s ease-in-out infinite;
-}
-.wealth-orbit__sphere {
-  position: absolute;
-  top: 3.5rem;
-  left: 3.5rem;
-  display: grid;
-  width: 7rem;
-  height: 7rem;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid rgba(225,250,255,.78);
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 31% 22%, rgba(255,255,255,.98), transparent 11%),
-    radial-gradient(circle at 32% 28%, #a9f4f2 0, #54bdcf 19%, #4d63cf 46%, #312962 73%, #172044 100%);
-  box-shadow: inset -14px -17px 24px rgba(12,13,49,.54), inset 7px 6px 16px rgba(255,255,255,.38), 0 0 34px rgba(91,205,235,.38);
-  transform: translateZ(30px);
-}
-.wealth-orbit__sphere::before,
-.wealth-orbit__sphere::after {
-  position: absolute;
-  content: "";
-  border: 1px solid rgba(222,251,255,.22);
-  border-radius: 50%;
-}
-.wealth-orbit__sphere::before { inset: 14% 34%; transform: rotate(28deg); }
-.wealth-orbit__sphere::after { inset: 34% 13%; transform: rotate(-24deg); }
-.wealth-orbit__sphere > span {
-  color: rgba(255,255,255,.92);
-  font-size: 1.8rem;
-  font-weight: 800;
-  letter-spacing: -.1em;
-  text-shadow: 0 2px 14px rgba(9,20,63,.6);
-  transform: translateX(-.04em);
-}
-.wealth-orbit__ring {
-  position: absolute;
-  top: 2.7rem;
-  left: 2.2rem;
-  width: 9.6rem;
-  height: 8.6rem;
-  border: 1px solid rgba(132,230,242,.68);
-  border-radius: 50%;
-  box-shadow: 0 0 13px rgba(75,207,229,.2), inset 0 0 10px rgba(75,207,229,.1);
-  transform-style: preserve-3d;
-}
-.wealth-orbit__ring--one { transform: rotateX(69deg) rotateZ(-23deg); }
-.wealth-orbit__ring--two { border-color: rgba(178,161,255,.62); transform: rotateY(68deg) rotateZ(32deg); }
-.wealth-orbit__ring--three { inset: 1.85rem 3.25rem; width: 7.5rem; height: 10.5rem; border-color: rgba(255,255,255,.24); transform: rotateX(76deg) rotateZ(58deg); }
-.wealth-orbit__satellite {
-  position: absolute;
-  z-index: 2;
-  width: .68rem;
-  height: .68rem;
-  border: 1px solid rgba(255,255,255,.86);
-  border-radius: 50%;
-  background: linear-gradient(145deg, #f4ffff, #60d9e8 55%, #7187ff);
-  box-shadow: 0 0 15px rgba(89,218,237,.86), inset 0 1px white;
-}
-.wealth-orbit__satellite--one { top: 2.75rem; left: 3.2rem; }
-.wealth-orbit__satellite--two { right: 2.15rem; bottom: 3.2rem; width: .42rem; height: .42rem; background: #c4adff; box-shadow: 0 0 13px rgba(173,146,255,.9); }
-.wealth-command-panel > :not(.wealth-orbit) { position: relative; z-index: 1; }
 .wealth-command-panel .hero-chart-shell { box-shadow: inset 0 1px rgba(255,255,255,.96), 0 13px 28px -21px rgba(2,9,38,.55); }
 .wealth-command-panel .wealth-stat {
   border-radius: .9rem;
@@ -390,20 +327,17 @@ html, body { overflow-x: clip; }
 .app-mobile-nav button { color: #74819a; transition: color .18s ease, background-color .18s ease; }
 .app-mobile-nav button:hover { color: #303faf; background: #eef0ff; }
 .app-mobile-nav a[aria-current="page"] { background: linear-gradient(145deg, #eef0ff, #edfaff); box-shadow: inset 0 1px white, 0 5px 14px -11px rgba(75,91,229,.8); }
-@keyframes wealth-orbit-float {
-  0%, 100% { transform: translateY(0) rotateX(0deg) rotateY(-7deg); }
-  50% { transform: translateY(8px) rotateX(2deg) rotateY(7deg); }
-}
-@media (max-width: 980px) {
-  .wealth-orbit { right: 3%; top: -3rem; transform: scale(.78); transform-origin: top right; opacity: .56; }
-}
 @media (max-width: 640px) {
-  .wealth-orbit { display: none; }
+  .wealth-key-stats .wealth-stat { padding: .6rem .5rem; }
+  .wealth-key-stats .wealth-label { font-size: .58rem; }
+  .wealth-key-stats .wealth-value { font-size: .9rem; }
+  .wealth-history-heading { font-size: .6rem; }
+  .wealth-history-sample { font-size: .52rem; }
+  .wealth-history-origin { font-size: .52rem; }
+  .wealth-snapshot-button { padding: .22rem .4rem; font-size: .52rem; }
+  .wealth-history-cadence { font-size: .5rem; }
   .app-mobile-nav a,
   .app-mobile-nav button { min-width: 0; padding-right: .45rem; padding-left: .45rem; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .wealth-orbit { animation: none; }
 }
 
 /* Login experience: a focused welcome, clear sign-in path, and honest product preview. */

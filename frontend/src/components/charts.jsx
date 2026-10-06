@@ -1,7 +1,7 @@
 import React from "react";
 import { ArcElement, BarElement, CategoryScale, Chart as ChartJS, Filler, Legend, LinearScale, LineElement, PointElement, Tooltip } from "chart.js";
 import { Bar, Doughnut, Line } from "react-chartjs-2";
-import { inr, fmtMonth } from "../lib/format";
+import { inr, fmtDate, fmtMonth } from "../lib/format";
 import { Card } from "./ui";
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, Filler, Legend, LinearScale, LineElement, PointElement, Tooltip);
@@ -38,12 +38,12 @@ export function CashFlowArea({ data, xKey = "month", monthLabels = true }) {
   return <><Line role="img" aria-label={summary} data={{ labels, datasets: [{ label: "Money in", data: income, borderColor: "#05A66C", backgroundColor: (c) => gradient(c, "rgba(5,166,108,.28)", "rgba(5,166,108,0)"), fill: true, tension: .42, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2.5 }, { label: "Money out", data: expenses, borderColor: "#F08072", backgroundColor: (c) => gradient(c, "rgba(240,128,114,.20)", "rgba(240,128,114,0)"), fill: true, tension: .42, pointRadius: 0, pointHoverRadius: 5, borderWidth: 2.5 }] }} options={{ responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: "index" }, plugins: { legend: { position: "top", align: "end", labels: { usePointStyle: true, pointStyle: "circle", boxWidth: 7, font: { family: "Manrope", size: 11 } } }, tooltip }, scales: { x: { ticks: axis, grid: { display: false }, border: { display: false } }, y: amountAxis() } }} /><AccessibleChartData title="Cash flow" labels={labels} series={[{ name: "Income", values: income }, { name: "Expenses", values: expenses }]} /></>;
 }
 
-export function TrendLine({ data, xKey = "month", yKey = "value", name = "Value", color = "#4B5BE5", monthLabels = true }) {
+export function TrendLine({ data, xKey = "month", yKey = "value", name = "Value", color = "#4B5BE5", monthLabels = true, dateLabels = false }) {
   if (!data?.length) return <ChartEmptyState message="No history recorded for this view yet" />;
-  const labels = data.map((d) => monthLabels ? fmtMonth(d[xKey]) : d[xKey]);
+  const labels = data.map((d) => dateLabels ? fmtDate(d[xKey]) : monthLabels ? fmtMonth(d[xKey]) : d[xKey]);
   const values = data.map((d) => d[yKey]);
-  const summary = `${name} trend with ${labels.length} recorded ${labels.length === 1 ? "period" : "periods"}. Detailed values are available in the following table.`;
-  return <><Line role="img" aria-label={summary} data={{ labels, datasets: [{ label: name, data: values, borderColor: color, backgroundColor: (c) => gradient(c, "rgba(75,91,229,.30)", "rgba(75,91,229,.015)"), fill: true, tension: .42, pointRadius: data.length === 1 ? 4 : 0, pointHoverRadius: 5, pointHoverBackgroundColor: "#fff", pointHoverBorderWidth: 3, borderWidth: 3 }] }} options={{ responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: "index" }, plugins: { legend: { display: false }, tooltip }, scales: { x: { ticks: { ...axis, maxTicksLimit: 5 }, grid: { display: false }, border: { display: false } }, y: { ...amountAxis(), display: false } } }} /><AccessibleChartData title={name} labels={labels} series={[{ name, values }]} /></>;
+  const summary = `${name} trend with ${labels.length} recorded ${labels.length === 1 ? "period" : "periods"}. Hover or focus a point to see its date and value. Detailed values are available in the following table.`;
+  return <><Line role="img" aria-label={summary} data={{ labels, datasets: [{ label: name, data: values, borderColor: color, backgroundColor: (c) => gradient(c, "rgba(75,91,229,.30)", "rgba(75,91,229,.015)"), fill: true, tension: .42, pointRadius: data.length === 1 ? 4 : 2, pointHoverRadius: 6, pointHoverBackgroundColor: "#fff", pointHoverBorderWidth: 3, borderWidth: 3 }] }} options={{ responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: "index" }, plugins: { legend: { display: false }, tooltip: { ...tooltip, callbacks: { title: (items) => items[0]?.label || "", label: (item) => `${item.dataset.label || name}: ${inr(item.raw)}` } } }, scales: { x: { ticks: { ...axis, maxTicksLimit: 5 }, grid: { display: false }, border: { display: false } }, y: { ...amountAxis(), display: false } } }} /><AccessibleChartData title={name} labels={labels} series={[{ name, values }]} /></>;
 }
 
 export function Bars({ data, xKey = "name", series = [{ key: "value", name: "Value", color: "#4B5BE5" }], monthLabels = false, stacked = false }) {
