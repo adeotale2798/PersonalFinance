@@ -82,7 +82,7 @@ export function StatusBadge({ status }) {
   return <Badge tone={statusTones[status] || "gray"}>{status.replace(/_/g, " ").toLowerCase()}</Badge>;
 }
 
-export function Modal({ open, onClose, title, children, size = "md" }) {
+export function Modal({ open, onClose, title, children, size = "md", panelClassName, contentClassName }) {
   useEffect(() => {
     if (!open) return;
     const h = (e) => e.key === "Escape" && onClose();
@@ -95,12 +95,12 @@ export function Modal({ open, onClose, title, children, size = "md" }) {
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" data-testid="modal" role="dialog" aria-modal="true" aria-label={title}>
       <div className="modal-backdrop absolute inset-0 bg-ink/40 backdrop-blur-[2px] animate-fade-in" onClick={onClose} />
-      <div className={cx("modal-panel relative bg-surface w-full rounded-t-2xl sm:rounded-2xl shadow-pop border border-line animate-fade-up max-h-[92vh] overflow-y-auto", w)}>
+      <div className={cx("modal-panel relative bg-surface w-full rounded-t-2xl sm:rounded-2xl shadow-pop border border-line animate-fade-up max-h-[92vh] overflow-y-auto", w, panelClassName)}>
         <div className="sticky top-0 bg-surface/95 backdrop-blur border-b border-line px-5 py-4 flex items-center justify-between z-10">
           <h3 className="font-display font-semibold text-lg text-ink">{title}</h3>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted text-subink" data-testid="modal-close"><X size={18} /></button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className={cx("p-5", contentClassName)}>{children}</div>
       </div>
     </div>,
     document.body
@@ -144,7 +144,7 @@ export function PageHeader({ title, subtitle, actions, icon: Icon }) {
       <div className="flex min-w-0 items-center gap-4">
         {Icon && <div className="page-header__icon w-12 h-12 rounded-2xl bg-white text-brand flex items-center justify-center shrink-0"><Icon size={22} /></div>}
         <div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-ink">{title}</h1>
+          <h1 className="page-header__title font-display text-2xl sm:text-3xl font-bold tracking-tight text-ink">{title}</h1>
           {subtitle && <p className="text-sm text-subink mt-1">{subtitle}</p>}
         </div>
       </div>

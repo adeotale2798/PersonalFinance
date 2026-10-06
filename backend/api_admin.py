@@ -2,12 +2,14 @@
 import re
 from fastapi import APIRouter, Depends, HTTPException
 from core import db, raw_db, serialize, oid, now_utc, require_admin, hash_password, log_audit
+from account_permissions import HOUSEHOLD_ROLE
 
 router = APIRouter(tags=["admin"])
 
 MODULES = ["overview", "finance", "budget", "costs", "payments", "parties",
            "contracts", "work", "documents", "requests", "reports"]
 LEVELS = ["none", "view", "edit", "approve"]
+ROLES = {"SUPER_ADMIN", "PROJECT_ADMIN", "PARTY_USER", HOUSEHOLD_ROLE}
 
 
 def is_platform_admin(user: dict) -> bool:
@@ -100,20 +102,23 @@ async def create_user(payload: dict, admin: dict = Depends(require_admin)):
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
+    role = payload.get("role", "PARTY_USER")
+    if role not in ROLES:
+        raise HTTPException(status_code=400, detail="Invalid user role")
+    if role == "SUPER_ADMIN" and not is_platform_admin(admin):
+        raise HTTPException(status_code=403, detail="Only the platform administrator can grant the finance-owner role")
     email = (payload.get("email") or "").strip().lower() or await available_login_id(name)
     # Emails remain global even though normal user management is workspace scoped.
     if await raw_db.users.find_one({"email": email}):
         raise HTTPException(status_code=409, detail="A user with this email already exists")
     password = payload.get("password") or f"{name.split()[-1]}@123"
-    role = payload.get("role", "PARTY_USER")
-    if role == "SUPER_ADMIN" and not is_platform_admin(admin):
-        raise HTTPException(status_code=403, detail="Only the platform administrator can create a separate finance workspace")
+    permissions = [] if role == HOUSEHOLD_ROLE else payload.get("permissions", [])
     doc = {
         "email": email,
         "name": name,
         "role": role,
         "party_type": payload.get("party_type"),
-        "permissions": payload.get("permissions", []),
+        "permissions": permissions,
         "password_hash": hash_password(password),
         "active": True,
         "initial_password_replaced": False,
@@ -142,6 +147,12 @@ async def update_user(item_id: str, payload: dict, admin: dict = Depends(require
     for k in ("name", "role", "party_type", "permissions", "active"):
         if k in payload:
             update[k] = payload[k]
+    if "role" in update and update["role"] not in ROLES:
+        raise HTTPException(status_code=400, detail="Invalid user role")
+    if update.get("role") == HOUSEHOLD_ROLE:
+        update["permissions"] = []
+    if update.get("role") == "SUPER_ADMIN" and not is_platform_admin(admin):
+        raise HTTPException(status_code=403, detail="Only the platform administrator can grant the finance-owner role")
     if payload.get("password"):
         update["password_hash"] = hash_password(payload["password"])
         update["initial_password_replaced"] = True
@@ -150,6 +161,8 @@ async def update_user(item_id: str, payload: dict, admin: dict = Depends(require
     target = await collection.find_one({"_id": oid(item_id)})
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    if target.get("role") == HOUSEHOLD_ROLE and update.get("role") in ("SUPER_ADMIN", "PROJECT_ADMIN"):
+        raise HTTPException(status_code=403, detail="Household collaborators cannot be promoted to an admin role")
     # Workspace ownership is structural: it cannot be granted accidentally by
     # editing an ordinary collaborator.
     if target.get("role") == "SUPER_ADMIN" and not is_platform_admin(admin):
@@ -173,7 +186,7 @@ async def delete_user(item_id: str, admin: dict = Depends(require_admin)):
 @router.get("/access-meta")
 async def access_meta(user: dict = Depends(require_admin)):
     return {"modules": MODULES, "levels": LEVELS,
-            "roles": ["SUPER_ADMIN", "PROJECT_ADMIN", "PARTY_USER"],
+            "roles": ["SUPER_ADMIN", "PROJECT_ADMIN", "PARTY_USER", "HOUSEHOLD_USER"],
             "party_types": ["Architect", "Civil Contractor", "Contractor A", "Contractor B",
                             "Plumber", "Electrician", "Structural Consultant", "Interior Contractor",
                             "Material Supplier", "Consultant", "Auditor", "Other"]}

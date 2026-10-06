@@ -15,7 +15,10 @@ async def overview(user: dict = Depends(require_admin)):
     now = now_utc()
     this_month = now.strftime("%Y-%m")
 
-    txns = await db.transactions.find({"deleted_at": {"$exists": False}}).to_list(50000)
+    txns = await db.transactions.find({
+        "deleted_at": {"$exists": False},
+        "transaction_status": {"$nin": ["PENDING", "VOID"]},
+    }).to_list(50000)
     month_income = month_expense = 0.0
     income_by_cat = defaultdict(float)
     expense_by_cat = defaultdict(float)
@@ -99,6 +102,120 @@ async def overview(user: dict = Depends(require_admin)):
             except Exception:
                 pass
 
+    from api_budgets import budget_overview
+    budget_data = await budget_overview(this_month)
+    next_actions = []
+    for item in budget_data["items"]:
+        if item["unplanned"]:
+            if item["actual"] > 0:
+                next_actions.append({
+                    "id": f"budget-unplanned:{item['category']}",
+                    "label": f"Plan {item['category']} spending",
+                    "detail": f"{round2(item['actual'])} posted spending has no category plan yet",
+                    "value": item["actual"],
+                    "path": "/budgets",
+                    "severity": "warning",
+                })
+            continue
+        if item["remaining"] < 0:
+            next_actions.append({
+                "id": f"budget-over:{item.get('id', item['category'])}",
+                "label": f"{item['category']} is over plan",
+                "detail": f"Posted spend exceeds available plan by {round2(-item['remaining'])}",
+                "value": round2(-item["remaining"]),
+                "path": "/budgets",
+                "severity": "critical",
+            })
+        elif item["available"] > 0 and item["percent_used"] is not None and item["percent_used"] >= 80:
+            next_actions.append({
+                "id": f"budget-near:{item.get('id', item['category'])}",
+                "label": f"{item['category']} is nearing its plan",
+                "detail": f"{round2(item['percent_used'])}% used · {round2(item['remaining'])} remains",
+                "value": item["remaining"],
+                "path": "/budgets",
+                "severity": "warning",
+            })
+
+    pending_transactions = await db.transactions.find({
+        "type": "EXPENSE",
+        "transaction_status": "PENDING",
+        "deleted_at": {"$exists": False},
+        "scope": {"$ne": "PROJECT"},
+        "project_id": {"$in": [None, ""]},
+    }).to_list(20000)
+    if pending_transactions:
+        pending_total = round2(sum(round2(item.get("amount", 0)) for item in pending_transactions))
+        next_actions.append({
+            "id": "pending-expenses",
+            "label": "Review pending expenses",
+            "detail": f"{len(pending_transactions)} expense record(s) are pending and excluded from posted totals",
+            "value": pending_total,
+            "path": "/expenses",
+            "severity": "info",
+        })
+
+    from api_planning import _all_events, INCOMING_KINDS, OUTGOING_KINDS
+    from datetime import timedelta
+    events = await _all_events(90)
+    due_horizon = (now.date() + timedelta(days=30)).isoformat()
+    current_day = now.date().isoformat()
+    available_cash = round2(nw["breakdown"]["bank"] + nw["breakdown"]["cash"])
+    daily_cash_change = defaultdict(float)
+    for event in events:
+        if event["due_date"] > due_horizon:
+            continue
+        if event["kind"] in INCOMING_KINDS:
+            daily_cash_change[event["due_date"]] += event["amount"]
+        elif event["kind"] in OUTGOING_KINDS:
+            daily_cash_change[event["due_date"]] -= event["amount"]
+        if event["kind"] == "GOAL" and event["due_date"] <= due_horizon:
+            next_actions.append({
+                "id": f"goal-due:{event['id']}",
+                "label": f"Review goal: {event['detail']}",
+                "detail": f"Target date {event['due_date']} · {round2(event['amount'])} still to fund",
+                "value": round2(event["amount"]),
+                "path": "/goals",
+                "severity": "warning" if event["due_date"] < current_day else "info",
+                "due_date": event["due_date"],
+            })
+        elif event["due_date"] <= due_horizon and event["kind"] not in INCOMING_KINDS:
+            next_actions.append({
+                "id": f"commitment:{event['id']}",
+                "label": event["title"],
+                "detail": f"{event['detail']} · due {event['due_date']}",
+                "value": round2(event["amount"]),
+                "path": event["path"],
+                "severity": "critical" if event["due_date"] < current_day else "warning",
+                "due_date": event["due_date"],
+            })
+    projected_cash = available_cash
+    minimum_projected_cash = available_cash
+    first_negative_date = None
+    for due_date, change in sorted(daily_cash_change.items()):
+        projected_cash = round2(projected_cash + change)
+        minimum_projected_cash = min(minimum_projected_cash, projected_cash)
+        if projected_cash < 0 and not first_negative_date:
+            first_negative_date = due_date
+    if first_negative_date:
+        next_actions.append({
+            "id": "cash-shortfall",
+            "label": "Projected cash may fall below zero",
+            "detail": f"The dated 30-day outlook first turns negative on {first_negative_date}; this is a forecast, not a posted balance.",
+            "value": minimum_projected_cash,
+            "path": "/planner",
+            "severity": "critical",
+            "due_date": first_negative_date,
+        })
+    severity_rank = {"critical": 0, "warning": 1, "info": 2}
+    next_actions.sort(key=lambda item: (severity_rank.get(item["severity"], 3), item.get("due_date", "9999-99-99"), item["label"]))
+    budget_alerts = [
+        item for item in next_actions
+        if item["id"].startswith(("budget-over:", "budget-near:", "budget-unplanned:"))
+    ]
+    pending_actions = [item for item in next_actions if item["id"] == "pending-expenses"]
+    other_actions = [item for item in next_actions if item not in budget_alerts and item not in pending_actions]
+    next_actions = (budget_alerts[:3] + pending_actions[:1] + other_actions)[:8]
+
     return {
         "net_worth": nw["net_worth"],
         "total_assets": nw["total_assets"],
@@ -124,6 +241,8 @@ async def overview(user: dict = Depends(require_admin)):
         "expense_breakdown": [{"name": k, "value": round2(v)} for k, v in sorted(expense_by_cat.items(), key=lambda x: -x[1])[:8]],
         "allocation": nw["allocation"],
         "attention": attention,
+        "budget_alerts": budget_alerts[:6],
+        "next_actions": next_actions[:8],
         "recent_activity": recent,
         "cash_position": {
             "available_now": round2(nw["breakdown"]["bank"] + nw["breakdown"]["cash"]),
@@ -144,7 +263,10 @@ async def financial_search(q: str = "", user: dict = Depends(require_admin)):
 
 @router.get("/dashboard/cashflow")
 async def cashflow(period: str = "monthly", user: dict = Depends(require_admin)):
-    txns = await db.transactions.find({"deleted_at": {"$exists": False}}).to_list(50000)
+    txns = await db.transactions.find({
+        "deleted_at": {"$exists": False},
+        "transaction_status": {"$nin": ["PENDING", "VOID"]},
+    }).to_list(50000)
 
     def bucket(date_str):
         if not date_str:

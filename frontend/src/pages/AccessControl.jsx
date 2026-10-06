@@ -75,7 +75,7 @@ export default function AccessControl() {
     setErr(""); setBusy(true);
     try {
       if (!form.name) throw new Error("Name is required");
-      const permissions = Object.entries(grants)
+      const permissions = form.role === "HOUSEHOLD_USER" ? [] : Object.entries(grants)
         .map(([pid, v]) => ({ project_id: pid, project_name: v.project_name, modules: Object.fromEntries(Object.entries(v.modules).filter(([, lvl]) => lvl && lvl !== "none")) }))
         .filter((p) => Object.keys(p.modules).length > 0);
       const body = { name: form.name || form.email, role: form.role, party_type: form.party_type, active: form.active, permissions };
@@ -93,7 +93,7 @@ export default function AccessControl() {
 
   return (
     <>
-      <PageHeader title={currentUser?.is_platform_admin ? "Platform access control" : "Access Control"} subtitle={currentUser?.is_platform_admin ? "Manage every finance owner and their workspace users." : "Grant granular, per-project, per-module access to parties and family."} icon={KeyRound}
+      <PageHeader title={currentUser?.is_platform_admin ? "Platform access control" : "Access Control"} subtitle={currentUser?.is_platform_admin ? "Manage every finance owner and their workspace users." : "Grant granular project access or explicitly share individual household accounts."} icon={KeyRound}
         actions={<Button size="sm" onClick={openAdd} data-testid="add-user"><Plus size={15} /> Add user</Button>} />
 
       {currentUser?.is_platform_admin && <Card className="mb-5 p-5">
@@ -135,7 +135,8 @@ export default function AccessControl() {
                     <td className="px-4 py-3"><Badge tone={u.role === "SUPER_ADMIN" ? "brand" : u.role === "PROJECT_ADMIN" ? "blue" : "gray"}>{u.is_platform_admin ? "PLATFORM ADMIN" : (u.role || "").replace(/_/g, " ")}</Badge>{u.party_type && <div className="text-xs text-faint mt-1">{u.party_type}</div>}</td>
                     <td className="px-4 py-3">
                       {u.role === "SUPER_ADMIN" ? <span className="text-xs text-brand flex items-center gap-1"><ShieldCheck size={13} /> Full access</span>
-                        : <span className="text-xs text-subink">{(u.permissions || []).length} project{(u.permissions || []).length !== 1 ? "s" : ""}</span>}
+                        : u.role === "HOUSEHOLD_USER" ? <span className="text-xs text-subink">Account grants managed per account</span>
+                          : <span className="text-xs text-subink">{(u.permissions || []).length} project{(u.permissions || []).length !== 1 ? "s" : ""}</span>}
                     </td>
                     <td className="px-4 py-3"><Badge tone={u.active === false ? "gray" : "green"}>{u.active === false ? "inactive" : "active"}</Badge></td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -156,14 +157,15 @@ export default function AccessControl() {
         <div className="grid sm:grid-cols-2 gap-3 mb-5">
           <Field label="Name"><Input value={form.name || ""} onChange={(e) => set("name", e.target.value)} data-testid="user-name" /></Field>
           <Field label="Login ID"><Input type="email" value={form.email || ""} disabled={modal?.mode === "edit"} onChange={(e) => set("email", e.target.value)} placeholder="Generated from last name" data-testid="user-email" /></Field>
-          <Field label="Role"><Select value={form.role || "PARTY_USER"} onChange={(e) => set("role", e.target.value)}><option value="PARTY_USER">Party User</option><option value="PROJECT_ADMIN">Project Admin</option><option value="SUPER_ADMIN">Finance owner — separate workspace</option></Select></Field>
+          <Field label="Role"><Select value={form.role || "PARTY_USER"} onChange={(e) => set("role", e.target.value)}><option value="PARTY_USER">Party User</option><option value="HOUSEHOLD_USER">Household collaborator</option><option value="PROJECT_ADMIN">Project Admin</option>{currentUser?.is_platform_admin && <option value="SUPER_ADMIN">Finance owner — separate workspace</option>}</Select></Field>
           <Field label="Party Type"><Select value={form.party_type || ""} onChange={(e) => set("party_type", e.target.value)}><option value="">—</option>{(meta.data?.party_types || []).map((t) => <option key={t}>{t}</option>)}</Select></Field>
           <Field label={modal?.mode === "edit" ? "Reset Password (optional)" : "Default Password"}><Input type="text" value={form.password || ""} onChange={(e) => set("password", e.target.value)} placeholder={modal?.mode === "edit" ? "Leave blank to keep" : "LastName@123"} /></Field>
           <Field label="Status"><Select value={form.active === false ? "false" : "true"} onChange={(e) => set("active", e.target.value === "true")}><option value="true">Active</option><option value="false">Inactive</option></Select></Field>
         </div>
 
         {form.role === "SUPER_ADMIN" && <p className="mb-4 text-sm text-brand bg-brand-light rounded-lg p-3">This creates a separate, blank finance workspace for this person. They will sign in with the credentials above and add their own accounts, projects, vendors and records.</p>}
-        {form.role !== "SUPER_ADMIN" && <><div className="mb-2 flex items-center justify-between">
+        {form.role === "HOUSEHOLD_USER" && <p className="mb-4 text-sm text-brand bg-brand-light rounded-lg p-3">Household collaborators start with no account access. After saving, grant read-only or use access separately from each account in Accounts &amp; Cash. They cannot access projects, documents, or unrelated finance modules.</p>}
+        {form.role !== "SUPER_ADMIN" && form.role !== "HOUSEHOLD_USER" && <><div className="mb-2 flex items-center justify-between">
           <h4 className="font-display font-semibold text-ink">Project Access</h4>
           <span className="text-xs text-faint">Click a module to cycle: none → view → edit → approve</span>
         </div>

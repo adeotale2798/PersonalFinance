@@ -54,6 +54,21 @@ async def seed_demo():
     for t in txns:
         t["created_at"] = now_utc(); t["created_by"] = "seed"
     await db.transactions.insert_many(txns)
+    current_month = month_ago(0)
+    starter_budgets = [
+        ("Household", 40000), ("Utilities", 10000), ("Food", 25000),
+        ("Travel", 10000), ("EMI", 50000), ("Subscriptions", 4000),
+        ("Medical", 8000), ("Shopping", 16000),
+    ]
+    await db.budgets.insert_many([
+        {
+            "month": current_month, "category": category, "category_key": category.casefold(),
+            "amount": amount, "budget_type": "MONTHLY", "rollover": False,
+            "notes": "Starter plan — adjust to your household", "created_at": now_utc(),
+            "created_by": "seed", "updated_at": now_utc(), "updated_by": "seed",
+        }
+        for category, amount in starter_budgets
+    ])
 
     # ---- lending ----
     lendings = [

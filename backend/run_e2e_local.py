@@ -27,6 +27,7 @@ def main():
 
     env = os.environ.copy()
     env.update({
+        "APP_ENV": "development",
         "MONGO_URL": mongo_url,
         "DB_NAME": database_name,
         "JWT_SECRET": f"local-e2e-only-{uuid.uuid4().hex}-{uuid.uuid4().hex}",

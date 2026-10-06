@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Spinner } from "./components/ui";
 import Layout from "./components/Layout";
@@ -8,9 +8,15 @@ import ErrorBoundary from "./components/ErrorBoundary";
 const Login = lazy(() => import("./pages/Login"));
 const Overview = lazy(() => import("./pages/Overview"));
 const CashFlow = lazy(() => import("./pages/CashFlow"));
+const Calendar = lazy(() => import("./pages/Calendar"));
+const DailySpending = lazy(() => import("./pages/DailySpending"));
+const DataQuality = lazy(() => import("./pages/DataQuality"));
+const Recurring = lazy(() => import("./pages/Recurring"));
+const DebtPayoff = lazy(() => import("./pages/DebtPayoff"));
 const Accounts = lazy(() => import("./pages/Accounts"));
 const Income = lazy(() => import("./pages/Income"));
 const Expenses = lazy(() => import("./pages/Expenses"));
+const Budgets = lazy(() => import("./pages/Budgets"));
 const Lending = lazy(() => import("./pages/Lending"));
 const Savings = lazy(() => import("./pages/Savings"));
 const PfPpf = lazy(() => import("./pages/PfPpf"));
@@ -41,8 +47,12 @@ const SiteWalkthrough = lazy(() => import("./pages/SiteWalkthrough"));
 
 function Protected({ children }) {
   const { user, checking, demoMode } = useAuth();
+  const { pathname } = useLocation();
   if (checking) return <div className="min-h-screen flex items-center justify-center"><Spinner className="w-7 h-7 text-brand" /></div>;
   if (!user && !demoMode) return <Navigate to="/login" replace />;
+  if (user?.role === "HOUSEHOLD_USER" && !["/accounts", "/daily-spending", "/income", "/expenses"].includes(pathname)) {
+    return <Navigate to="/accounts" replace />;
+  }
   return user.role === "PARTY_USER" ? <PartyPortal /> : <Layout>{children}</Layout>;
 }
 
@@ -55,9 +65,15 @@ function Shell() {
       <Route path="/sitewalkthrough" element={<Suspense fallback={<div className="min-h-screen grid place-items-center"><Spinner className="w-7 h-7 text-brand" /></div>}><SiteWalkthrough /></Suspense>} />
       <Route path="/" element={guarded(Overview)} />
       <Route path="/cash-flow" element={guarded(CashFlow)} />
+      <Route path="/calendar" element={guarded(Calendar)} />
+      <Route path="/daily-spending" element={guarded(DailySpending)} />
+      <Route path="/data-quality" element={guarded(DataQuality)} />
+      <Route path="/recurring" element={guarded(Recurring)} />
+      <Route path="/debt-payoff" element={guarded(DebtPayoff)} />
       <Route path="/accounts" element={guarded(Accounts)} />
       <Route path="/income" element={guarded(Income)} />
       <Route path="/expenses" element={guarded(Expenses)} />
+      <Route path="/budgets" element={guarded(Budgets)} />
       <Route path="/lending" element={guarded(Lending)} />
       <Route path="/savings" element={guarded(Savings)} />
       <Route path="/pf-ppf" element={guarded(PfPpf)} />

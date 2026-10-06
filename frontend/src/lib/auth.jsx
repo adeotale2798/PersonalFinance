@@ -8,6 +8,10 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null); // null=checking, false=anon, obj=user
   const [checking, setChecking] = useState(true);
   const [demoMode, setDemoMode] = useState(isDemoMode);
+  const setupKey = user && user !== false
+    ? `nivara_setup_dismissed:${demoMode ? "demo" : user.id || user.email || "workspace"}`
+    : null;
+  const [setupDismissal, setSetupDismissal] = useState({ key: null, dismissed: false });
 
   useEffect(() => {
     if (isDemoMode()) {
@@ -22,6 +26,28 @@ export function AuthProvider({ children }) {
       .catch(() => { localStorage.removeItem("nivara_token"); setUser(false); })
       .finally(() => setChecking(false));
   }, []);
+
+  useEffect(() => {
+    if (!setupKey) {
+      setSetupDismissal({ key: null, dismissed: false });
+      return;
+    }
+    let dismissed = false;
+    try {
+      const storage = demoMode ? window.sessionStorage : window.localStorage;
+      dismissed = storage.getItem(setupKey) === "true";
+    } catch (_) {}
+    setSetupDismissal({ key: setupKey, dismissed });
+  }, [setupKey, demoMode]);
+
+  const dismissSetup = useCallback(() => {
+    if (!setupKey) return;
+    try {
+      const storage = demoMode ? window.sessionStorage : window.localStorage;
+      storage.setItem(setupKey, "true");
+    } catch (_) {}
+    setSetupDismissal({ key: setupKey, dismissed: true });
+  }, [setupKey, demoMode]);
 
   const login = useCallback(async (email, password) => {
     try {
@@ -58,7 +84,8 @@ export function AuthProvider({ children }) {
     window.dispatchEvent(new Event("nivara:data-changed"));
   }, []);
 
-  return <AuthCtx.Provider value={{ user, checking, login, logout, demoMode, enterDemo }}>{children}</AuthCtx.Provider>;
+  const setupDismissed = !!setupKey && setupDismissal.key === setupKey && setupDismissal.dismissed;
+  return <AuthCtx.Provider value={{ user, checking, login, logout, demoMode, enterDemo, setupDismissed, dismissSetup }}>{children}</AuthCtx.Provider>;
 }
 
 export const useAuth = () => useContext(AuthCtx);

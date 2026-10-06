@@ -75,6 +75,7 @@ def admin(client):
 
 def test_login_protection_and_full_dashboard_calculations(client, admin):
     assert client.get("/api/accounts").status_code == 401
+    assert client.get(f"/api/budgets?month={TODAY[:7]}").status_code == 401
     assert client.post(
         "/api/auth/login",
         json={"email": os.environ["ADMIN_EMAIL"], "password": "not-the-local-password"},
@@ -100,9 +101,201 @@ def test_login_protection_and_full_dashboard_calculations(client, admin):
     assert history.status_code == 200 and history.json()["items"]
 
 
+def test_household_account_sharing_read_use_and_revocation(client, admin):
+    accounts = admin.get("/accounts").json()
+    assert accounts
+    account = accounts[0]
+    email = f"household-{uuid4().hex[:8]}@nivara.local"
+    password = f"LocalE2E-{uuid4().hex[:12]}!"
+    created = admin.post("/users", json={
+        "name": "E2E Household Collaborator",
+        "email": email,
+        "role": "HOUSEHOLD_USER",
+        "password": password,
+        "permissions": [{"project_id": "must-be-cleared"}],
+    })
+    assert created.status_code == 200, created.text
+    collaborator_id = created.json()["id"]
+    assert created.json()["permissions"] == []
+
+    login = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert login.status_code == 200, login.text
+    household = Api(client, login.json()["access_token"])
+    assert household.get("/accounts").json() == []
+    assert household.get("/dashboard/overview").status_code == 403
+    assert household.get("/documents").status_code == 403
+
+    grant = admin.post(f"/accounts/{account['id']}/access", json={
+        "user_id": collaborator_id,
+        "access": "read",
+    })
+    assert grant.status_code == 200, grant.text
+    visible_accounts = household.get("/accounts").json()
+    assert [item["id"] for item in visible_accounts] == [account["id"]]
+    assert visible_accounts[0]["access_level"] == "read"
+    safe_settings = household.get("/settings")
+    assert safe_settings.status_code == 200
+    assert "project_categories" not in safe_settings.json()
+
+    expense = {
+        "type": "EXPENSE",
+        "date": TODAY,
+        "amount": 9.25,
+        "category": "Household E2E",
+        "account_id": account["id"],
+        "transaction_status": "POSTED",
+        "record_source": "MANUAL",
+        "scope": "PERSONAL",
+    }
+    assert household.post("/transactions", json=expense).status_code == 404
+
+    upgrade = admin.post(f"/accounts/{account['id']}/access", json={
+        "user_id": collaborator_id,
+        "access": "use",
+    })
+    assert upgrade.status_code == 200, upgrade.text
+    created_transaction = household.post("/transactions", json=expense)
+    assert created_transaction.status_code == 200, created_transaction.text
+    transaction = created_transaction.json()
+    assert transaction["account_id"] == account["id"]
+    assert "created_by" not in transaction and "workspace_id" not in transaction
+    assert household.delete(f"/transactions/{transaction['id']}").status_code == 403
+    voided = household.put(
+        f"/transactions/{transaction['id']}",
+        json={"transaction_status": "VOID"},
+    )
+    assert voided.status_code == 200, voided.text
+    assert voided.json()["transaction_status"] == "VOID"
+    assert admin.delete(f"/transactions/{transaction['id']}").status_code == 200
+
+    reconcile = household.post(f"/accounts/{account['id']}/reconcile", json={
+        "statement_balance": visible_accounts[0]["current_balance"],
+        "as_of_date": TODAY,
+        "note": "E2E comparison",
+    })
+    assert reconcile.status_code == 200, reconcile.text
+
+    revoked = admin.delete(f"/accounts/{account['id']}/access/{collaborator_id}")
+    assert revoked.status_code == 200, revoked.text
+    assert household.get("/accounts").json() == []
+    assert household.get("/transactions").json() == []
+
+
+def test_cgas_construction_demands_and_utilization_are_project_scoped(admin):
+    project_response = admin.post("/projects", json={
+        "name": f"E2E CGAS Construction {uuid4().hex[:6]}",
+        "type": "Construction",
+        "budget": 250000,
+    })
+    assert project_response.status_code == 200, project_response.text
+    project_id = project_response.json()["id"]
+    path = f"/projects/{project_id}/cgas"
+    assert admin.get(path).json() == {"configuration": None, "demands": []}
+    assert admin.post(f"{path}/demands", json={
+        "stage_name": "Foundation",
+        "requested_amount": 1000,
+    }).status_code == 409
+
+    account = admin.get("/accounts").json()[0]
+    configured = admin.put(path, json={
+        "bank_name": "Example CGAS Bank",
+        "account_id": account["id"],
+        "deposit_date": TODAY,
+        "total_deposited_amount": 250000,
+        "construction_deadline": (TODAY_DATE + timedelta(days=365 * 3)).isoformat(),
+        "notes": "Type A savings account",
+    })
+    assert configured.status_code == 200, configured.text
+    assert configured.json()["account_name"] == account["name"]
+    assert configured.json()["total_deposited_amount"] == 250000
+
+    submission_without_bills = admin.post(f"{path}/demands", json={
+        "stage_name": "Foundation",
+        "requested_amount": 1000,
+        "status": "SUBMITTED",
+    })
+    assert submission_without_bills.status_code == 422
+
+    demand_response = admin.post(f"{path}/demands", json={
+        "stage_name": "Foundation work",
+        "requested_amount": 1500,
+        "requested_date": TODAY,
+        "status": "SUBMITTED",
+        "bank_reference": "CGAS-E2E-001",
+        "bills": [
+            {"contractor": "Builder A", "bill_number": "A-101", "bill_date": TODAY, "amount": 900},
+            {"contractor": "Supplier B", "bill_number": "B-205", "bill_date": TODAY, "amount": 600},
+        ],
+    })
+    assert demand_response.status_code == 200, demand_response.text
+    demand = demand_response.json()
+    assert demand["bill_total"] == 1500
+    assert len(demand["bills"]) == 2
+    assert demand["withdrawn_amount"] == 0
+
+    updated = admin.put(f"{path}/demands/{demand['id']}", json={
+        "stage_name": "Foundation work",
+        "requested_amount": 1500,
+        "requested_date": TODAY,
+        "status": "PARTIALLY_RELEASED",
+        "bank_reference": "CGAS-E2E-001",
+        "bills": demand["bills"],
+        "withdrawn_amount": 1200,
+        "withdrawal_date": TODAY,
+        "utilized_amount": 800,
+        "redeposited_amount": 100,
+        "notes": "Partial payment recorded",
+    })
+    assert updated.status_code == 200, updated.text
+    updated_demand = updated.json()
+    assert updated_demand["unaccounted_amount"] == 300
+    assert updated_demand["utilization_due_date"] == (TODAY_DATE + timedelta(days=60)).isoformat()
+
+    cleared_withdrawal = admin.put(f"{path}/demands/{demand['id']}", json={
+        "stage_name": "Foundation work",
+        "requested_amount": 1500,
+        "status": "PARTIALLY_RELEASED",
+        "bills": demand["bills"],
+        "withdrawn_amount": 0,
+    })
+    assert cleared_withdrawal.status_code == 409
+
+    invalid_utilization = admin.put(f"{path}/demands/{demand['id']}", json={
+        "stage_name": "Foundation work",
+        "requested_amount": 1500,
+        "status": "RELEASED",
+        "bills": demand["bills"],
+        "withdrawn_amount": 1200,
+        "withdrawal_date": TODAY,
+        "utilized_amount": 1100,
+        "redeposited_amount": 200,
+    })
+    assert invalid_utilization.status_code == 422
+
+    assert admin.get(f"/projects/{account['id']}/cgas").status_code == 404
+    other_project = admin.post("/projects", json={
+        "name": f"E2E Other {uuid4().hex[:6]}",
+        "type": "Construction",
+        "budget": 0,
+    }).json()
+    assert admin.put(f"/projects/{other_project['id']}/cgas/demands/{demand['id']}", json={
+        "stage_name": "Foundation work",
+        "requested_amount": 1500,
+        "bills": demand["bills"],
+    }).status_code == 404
+
+    delete_withdrawn = admin.delete(f"{path}/demands/{demand['id']}")
+    assert delete_withdrawn.status_code == 409
+
+
 def test_all_screen_data_apis_and_seeded_dummy_sections(admin):
     endpoints = [
         ("/dashboard/cashflow?period=monthly", dict),
+        (f"/calendar?year={TODAY_DATE.year}", dict),
+        (f"/calendar?year={TODAY_DATE.year}&month={TODAY_DATE.month}", dict),
+        (f"/calendar?year={TODAY_DATE.year}&month={TODAY_DATE.month}&day={TODAY}", dict),
+        ("/data-quality", dict),
+        (f"/budgets?month={TODAY[:7]}", dict),
         ("/accounts", list), ("/transactions", list),
         ("/income/summary", dict), ("/expenses/summary", dict), ("/settings", dict),
         ("/lending?direction=LENT", list), ("/lending/summary?direction=LENT", dict),
@@ -136,6 +329,21 @@ def test_all_screen_data_apis_and_seeded_dummy_sections(admin):
     assert admin.get("/necessities").json()
     assert admin.get("/notifications?status=ALL").json()["items"]
     assert admin.get("/planning/overview").json()["calendar"]
+    search_results = admin.get("/search?q=salary").json()["items"]
+    assert search_results
+    assert all({"group", "id", "label", "detail", "path"} <= row.keys() for row in search_results)
+    assert any(row["group"] == "TRANSACTIONS" and row["label"] != "Untitled" for row in search_results)
+    assert admin.get("/search?q=s").json()["items"] == []
+    calendar_year = admin.get(f"/calendar?year={TODAY_DATE.year}").json()
+    assert calendar_year["view"] == "year" and len(calendar_year["months"]) == 12
+    assert sum(month["income"] for month in calendar_year["months"]) == pytest.approx(calendar_year["totals"]["income"])
+    assert sum(month["expense"] for month in calendar_year["months"]) == pytest.approx(calendar_year["totals"]["expense"])
+    calendar_month = admin.get(f"/calendar?year={TODAY_DATE.year}&month={TODAY_DATE.month}").json()
+    assert calendar_month["view"] == "month" and calendar_month["days"]
+    calendar_day = admin.get(f"/calendar?year={TODAY_DATE.year}&month={TODAY_DATE.month}&day={TODAY}").json()
+    assert calendar_day["view"] == "day" and calendar_day["date"] == TODAY
+    assert isinstance(calendar_day["transactions"], list)
+    assert admin.get("/data-quality").json()["thresholds"]["reconciliation_due_days"] == 90
     assert admin.get("/work-logs").json()
     assert admin.get("/projects").json()
     inbox_item = admin.get("/planning/inbox?state=NEEDS_REVIEW").json()[0]
@@ -320,6 +528,38 @@ def test_transaction_balance_reconciliation_and_dashboard_refresh(admin):
     assert expense.status_code == 200, expense.text
     balance = next(row["current_balance"] for row in admin.get("/accounts").json() if row["id"] == account_id)
     assert balance == 1400
+    pending = admin.post("/transactions", json={
+        "type": "EXPENSE", "date": base_date, "amount": 200,
+        "account_id": account_id, "category": "E2E pending", "scope": "PERSONAL",
+        "transaction_status": "PENDING", "record_source": "IMPORT",
+    })
+    assert pending.status_code == 200, pending.text
+    account = next(row for row in admin.get("/accounts").json() if row["id"] == account_id)
+    assert account["current_balance"] == 1400
+    assert account["balance_source"] == "MANUAL"
+    assert account["reconciliation_status"] == "NOT_RECONCILED"
+    matched = admin.post(f"/accounts/{account_id}/reconcile", json={
+        "statement_balance": 1400, "as_of_date": base_date, "note": "E2E exact match",
+    })
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["status"] == "MATCHED"
+    variance = admin.post(f"/accounts/{account_id}/reconcile", json={
+        "statement_balance": 1350, "as_of_date": base_date,
+    })
+    assert variance.status_code == 200, variance.text
+    assert variance.json()["status"] == "VARIANCE"
+    assert variance.json()["difference"] == -50
+    assert next(row["current_balance"] for row in admin.get("/accounts").json() if row["id"] == account_id) == 1400
+    assert len(admin.get(f"/accounts/{account_id}/reconciliations").json()) == 2
+    assert admin.post(f"/accounts/{account_id}/reconcile", json={
+        "statement_balance": 10, "as_of_date": "not-a-date",
+    }).status_code == 400
+    assert admin.post(f"/accounts/{'0' * 24}/reconcile", json={
+        "statement_balance": 10, "as_of_date": base_date,
+    }).status_code == 404
+    assert admin.post(f"/accounts/{account_id}/reconcile", json={
+        "statement_balance": True, "as_of_date": base_date,
+    }).status_code == 422
     assert admin.get("/income/summary").json()["by_group"]
     assert admin.get("/expenses/summary").json()["by_group"]
     monthly = admin.get("/dashboard/cashflow?period=monthly").json()
@@ -333,8 +573,97 @@ def test_transaction_balance_reconciliation_and_dashboard_refresh(admin):
     assert next(row["current_balance"] for row in admin.get("/accounts").json() if row["id"] == account_id) == 1375
     assert admin.delete(f"/transactions/{income.json()['id']}").status_code == 200
     assert admin.delete(f"/transactions/{expense.json()['id']}").status_code == 200
+    assert admin.delete(f"/transactions/{pending.json()['id']}").status_code == 200
+    destination = admin.post("/accounts", json={
+        "name": "E2E transfer destination", "type": "BANK", "opening_balance": 50,
+    })
+    assert destination.status_code == 200, destination.text
+    transfer = admin.post("/transactions", json={
+        "type": "TRANSFER", "date": base_date, "amount": 25,
+        "account_id": account_id, "to_account_id": destination.json()["id"],
+        "record_source": "IMPORT",
+    })
+    assert transfer.status_code == 200, transfer.text
+    account_rows = admin.get("/accounts").json()
+    destination_row = next(row for row in account_rows if row["id"] == destination.json()["id"])
+    assert destination_row["current_balance"] == 75
+    assert destination_row["balance_source"] == "IMPORT"
+    overdraft = admin.post(f"/accounts/{destination.json()['id']}/reconcile", json={
+        "statement_balance": -25, "as_of_date": base_date,
+    })
+    assert overdraft.status_code == 200, overdraft.text
+    assert overdraft.json()["status"] == "VARIANCE" and overdraft.json()["difference"] == -100
+    assert admin.delete(f"/transactions/{transfer.json()['id']}").status_code == 200
     assert admin.delete(f"/accounts/{account_id}").status_code == 200
+    assert admin.delete(f"/accounts/{destination.json()['id']}").status_code == 200
     assert len(admin.get("/accounts").json()) == len(before)
+
+
+def test_category_budgets_include_posted_pending_and_rollover(admin):
+    month = TODAY[:7]
+    year, month_number = map(int, month.split("-"))
+    previous_month = f"{year - 1}-12" if month_number == 1 else f"{year}-{month_number - 1:02d}"
+    category = f"E2E budget {uuid4().hex[:8]}"
+    previous_date = f"{previous_month}-15"
+    current_date = f"{month}-15"
+
+    previous = admin.post("/budgets", json={
+        "month": previous_month, "category": category, "amount": 40,
+        "budget_type": "SINKING", "rollover": True,
+    })
+    assert previous.status_code == 200, previous.text
+    prior_expense = admin.post("/transactions", json={
+        "type": "EXPENSE", "date": previous_date, "amount": 15,
+        "category": category, "scope": "PERSONAL",
+    })
+    assert prior_expense.status_code == 200, prior_expense.text
+
+    for amount, status, scope in ((30, "POSTED", "PERSONAL"), (5, "PENDING", "PERSONAL"), (9, "VOID", "PERSONAL"), (100, "POSTED", "PROJECT")):
+        transaction = admin.post("/transactions", json={
+            "type": "EXPENSE", "date": current_date, "amount": amount,
+            "category": category, "scope": scope, "transaction_status": status,
+        })
+        assert transaction.status_code == 200, transaction.text
+
+    current = admin.post("/budgets", json={
+        "month": month, "category": category, "amount": 10,
+        "budget_type": "SINKING", "rollover": True,
+    })
+    assert current.status_code == 200, current.text
+    item = next(row for row in current.json()["items"] if row["category"] == category)
+    assert item["carryover"] == 25
+    assert item["available"] == 35
+    assert item["actual"] == 30
+    assert item["pending"] == 5
+    assert item["remaining"] == 5
+    dashboard = admin.get("/dashboard/overview").json()
+    assert any(row["id"] == f"budget-near:{item['id']}" for row in dashboard["budget_alerts"])
+    pending_action = next(row for row in dashboard["next_actions"] if row["id"] == "pending-expenses")
+    assert pending_action["value"] == 5 and pending_action["path"] == "/expenses"
+
+    updated = admin.post("/budgets", json={
+        "month": month, "category": category, "amount": 55,
+        "budget_type": "SINKING", "rollover": True,
+    })
+    updated_item = next(row for row in updated.json()["items"] if row["category"] == category)
+    assert updated_item["amount"] == 55
+    assert sum(row["category"] == category for row in updated.json()["items"]) == 1
+    deleted = admin.delete(f"/budgets/{updated_item['id']}")
+    assert deleted.status_code == 200, deleted.text
+    deleted_overview = admin.get(f"/budgets?month={month}").json()
+    deleted_item = next(row for row in deleted_overview["items"] if row["category"] == category)
+    assert deleted_item["unplanned"] and deleted_item["amount"] == 0 and deleted_item["actual"] == 30
+    assert admin.delete(f"/budgets/{updated_item['id']}").status_code == 404
+    assert admin.get("/budgets?month=2026-13").status_code == 422
+    assert admin.post("/budgets", json={
+        "month": month, "category": "   ", "amount": 50,
+    }).status_code == 422
+    assert admin.post("/budgets", json={
+        "month": month, "category": category, "amount": -1,
+    }).status_code == 422
+    assert admin.post("/budgets", json={
+        "month": month, "category": category, "amount": True,
+    }).status_code == 422
 
 
 def test_lending_savings_contribution_insurance_and_rent_calculations(admin):
