@@ -98,6 +98,26 @@ async def net_worth_history_endpoint(user: dict = Depends(require_admin)):
     return {"items": await net_worth_history(), "note": "Only recorded valuation snapshots are shown; no historical values are estimated."}
 
 
+@router.post("/networth/snapshot")
+async def record_net_worth_snapshot(user: dict = Depends(require_admin)):
+    """Record the current ledger valuation for today without inventing a past value."""
+    data = await networth_data()
+    await snapshot_net_worth(
+        data["net_worth"],
+        data["total_assets"],
+        data["total_liabilities"],
+        source="manual",
+        replace_today=True,
+    )
+    return {
+        "date": now_utc().date().isoformat(),
+        "net_worth": data["net_worth"],
+        "total_assets": data["total_assets"],
+        "total_liabilities": data["total_liabilities"],
+        "source": "manual",
+    }
+
+
 async def networth_data():
     balances, accts = await compute_account_balances()
     bank = round2(sum(v for k, v in balances.items()

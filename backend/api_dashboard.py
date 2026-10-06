@@ -177,6 +177,8 @@ async def overview(user: dict = Depends(require_admin)):
                 "path": "/goals",
                 "severity": "warning" if event["due_date"] < current_day else "info",
                 "due_date": event["due_date"],
+                "source_collection": event["source_collection"],
+                "source_id": event["source_id"],
             })
         elif event["due_date"] <= due_horizon and event["kind"] not in INCOMING_KINDS:
             next_actions.append({
@@ -187,6 +189,8 @@ async def overview(user: dict = Depends(require_admin)):
                 "path": event["path"],
                 "severity": "critical" if event["due_date"] < current_day else "warning",
                 "due_date": event["due_date"],
+                "source_collection": event["source_collection"],
+                "source_id": event["source_id"],
             })
     projected_cash = available_cash
     minimum_projected_cash = available_cash
@@ -208,6 +212,17 @@ async def overview(user: dict = Depends(require_admin)):
         })
     severity_rank = {"critical": 0, "warning": 1, "info": 2}
     next_actions.sort(key=lambda item: (severity_rank.get(item["severity"], 3), item.get("due_date", "9999-99-99"), item["label"]))
+    action_ids = [item["id"] for item in next_actions]
+    action_states = await db.planning_actions.find({"fingerprint": {"$in": action_ids}}).to_list(len(action_ids))
+    states_by_id = {item["fingerprint"]: item for item in action_states}
+    next_actions = [
+        item for item in next_actions
+        if states_by_id.get(item["id"], {}).get("status") != "RESOLVED"
+        and not (
+            states_by_id.get(item["id"], {}).get("status") == "SNOOZED"
+            and states_by_id[item["id"]].get("snoozed_until", "") >= current_day
+        )
+    ]
     budget_alerts = [
         item for item in next_actions
         if item["id"].startswith(("budget-over:", "budget-near:", "budget-unplanned:"))

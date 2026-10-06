@@ -231,8 +231,15 @@ async def update_action(action_id: str, payload: dict, user: dict = Depends(requ
     action = payload.get("action", "resolve").lower()
     source = payload.get("source_collection", "")
     source_id = payload.get("source_id", "")
-    if not source or not source_id:
+    generated_dashboard_action = action_id == "pending-expenses" or action_id == "cash-shortfall" or action_id.startswith(
+        ("budget-over:", "budget-near:", "budget-unplanned:", "goal-due:")
+    )
+    if action not in {"resolve", "postpone", "review", "record_payment"}:
+        raise HTTPException(status_code=400, detail="Choose a supported action")
+    if (not source or not source_id) and not generated_dashboard_action:
         raise HTTPException(status_code=400, detail="This action is missing its source record")
+    if action == "record_payment" and (not source or not source_id):
+        raise HTTPException(status_code=400, detail="This action has no payable source record")
     if action == "record_payment":
         amount = round2(payload.get("amount", 0))
         if amount <= 0:

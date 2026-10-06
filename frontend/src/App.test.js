@@ -58,6 +58,25 @@ describe("application route smoke test", () => {
       expect(main.querySelector("h1, h2")).toBeTruthy();
       expect(main.textContent).not.toContain("This screen needs a refresh");
     }
+    await act(async () => {
+      window.history.pushState({}, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await flush();
+      await flush();
+    });
+    expect(host.querySelector(".wealth-orbit")).toBeNull();
+    expect(host.querySelector(".wealth-command-panel")?.textContent).toContain("Total net worth");
+    expect(host.querySelector('[data-testid="net-worth-panel"]').textContent).toContain("Illustrative demo data");
+    expect(host.querySelector('[data-testid="net-worth-history"] .wealth-chart-area')).toBeTruthy();
+    expect(host.querySelectorAll('[data-testid="net-worth-history"] table tbody tr').length).toBeGreaterThanOrEqual(3);
+    expect(host.querySelector('[data-testid="record-net-worth-snapshot"]')?.textContent).toBe("Record today");
+    expect(host.querySelector('[data-testid="account-freshness"]').textContent).toContain("Latest balance activity");
+    expect(host.querySelector('[data-testid="account-freshness"]').textContent).toContain("Latest reconciliation");
+    expect(host.querySelectorAll(".wealth-key-stats .wealth-stat")).toHaveLength(3);
+    expect(host.querySelectorAll('[data-testid="action-center"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-label^="Resolve or postpone "]')).toBeTruthy();
+    expect(host.querySelector("main.app-main").textContent).toContain("What needs your attention?");
+
   });
 
   it("opens a seeded project workspace from its project card", async () => {
@@ -122,6 +141,14 @@ describe("application route smoke test", () => {
 
     expect(host.querySelectorAll(".app-mobile-nav > *")).toHaveLength(5);
     expect(host.querySelector('[data-testid="mobile-fab"]')).toBeNull();
+    expect(host.querySelector('[data-testid="mobile-nav-daily"]')?.getAttribute("href")).toBe("/daily-spending");
+    const nextAction = host.querySelector('[data-testid="mobile-nav-next"]');
+    expect(nextAction?.getAttribute("aria-label")).toMatch(/^Open next priority:/);
+    await act(async () => {
+      nextAction.click();
+      await flush();
+    });
+    expect(window.location.pathname).not.toBe("/planner");
     expect(host.querySelector('[data-testid="header-quick-add"]')?.getAttribute("aria-label"))
       .toBe("Record a transaction");
 
@@ -134,6 +161,7 @@ describe("application route smoke test", () => {
 
     expect(host.querySelector(".app-mobile-drawer")).toBeTruthy();
     expect(host.querySelector('[data-testid="nav-budgets"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="nav-calendar"]')).toBeTruthy();
   });
 
   it("shows complete CRUD records and accessible actions in the phone layout", async () => {
@@ -168,5 +196,96 @@ describe("application route smoke test", () => {
     expect(document.querySelector(".quick-add-modal")).toBeTruthy();
     expect(document.querySelector(".quick-add-fields")).toBeTruthy();
     expect(document.querySelector(".quick-add-actions [data-testid='quick-submit']")).toBeTruthy();
+  });
+
+  it("closes the mobile search overlay when tapping outside it", async () => {
+    await act(async () => {
+      root.render(<App />);
+      await flush();
+    });
+
+    await act(async () => {
+      host.querySelector('button[aria-label="Search financial records"]').click();
+      await flush();
+    });
+    expect(host.querySelector("#financial-search-mobile")).toBeTruthy();
+
+    await act(async () => {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      await flush();
+    });
+    expect(host.querySelector("#financial-search-mobile")).toBeNull();
+  });
+
+  it("offers cash expenses without linking or deducting the cash account", async () => {
+    await act(async () => {
+      window.history.replaceState({}, "", "/expenses");
+      root.render(<App />);
+      await flush();
+      await flush();
+    });
+
+    await act(async () => {
+      host.querySelector('[data-testid="add-expense-records"]').click();
+      await flush();
+    });
+    const expenseAccount = document.querySelector('[data-testid="field-account_id"]');
+    expect(expenseAccount.querySelector('option[value="__cash__"]')?.textContent)
+      .toBe("Cash (no account deduction)");
+    expect(expenseAccount.querySelector('option[value="account-cash"]')).toBeNull();
+    await act(async () => {
+      expenseAccount.value = "__cash__";
+      expenseAccount.dispatchEvent(new Event("change", { bubbles: true }));
+      await flush();
+    });
+    expect(document.querySelector('[data-testid="field-payment_mode"]').value).toBe("Cash");
+
+    await act(async () => {
+      window.history.pushState({}, "", "/daily-spending");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await flush();
+      await flush();
+    });
+    const dailyAccount = host.querySelector('[data-testid="daily-expense-account"]');
+    expect(dailyAccount.querySelector('option[value="__cash__"]')?.textContent)
+      .toBe("Cash (no account deduction)");
+    expect(dailyAccount.querySelector('option[value="account-cash"]')).toBeNull();
+    await act(async () => {
+      const paymentMode = host.querySelector('[data-testid="daily-expense-payment-mode"]');
+      paymentMode.value = "Cash";
+      paymentMode.dispatchEvent(new Event("change", { bubbles: true }));
+      await flush();
+    });
+    expect(host.querySelector('[data-testid="daily-expense-account"]').value).toBe("__cash__");
+    expect(host.querySelector('[data-testid="daily-quick-add"]')).toBeTruthy();
+    await act(async () => {
+      host.querySelector('[data-testid="daily-quick-add"]').click();
+      await flush();
+      await flush();
+    });
+    expect(document.querySelector(".quick-add-modal")).toBeTruthy();
+    expect(document.querySelector('[data-testid="quick-type-EXPENSE"]')).toBeTruthy();
+  });
+
+  it("selects cash without an account in quick transaction entry", async () => {
+    await act(async () => {
+      root.render(<App />);
+      await flush();
+    });
+    await act(async () => {
+      host.querySelector('[data-testid="header-quick-add"]').click();
+      await flush();
+      await flush();
+    });
+
+    const account = document.querySelector('[data-testid="quick-account"]');
+    expect(account.querySelector('option[value="__cash__"]')?.textContent)
+      .toBe("Cash (no account deduction)");
+    await act(async () => {
+      account.value = "__cash__";
+      account.dispatchEvent(new Event("change", { bubbles: true }));
+      await flush();
+    });
+    expect(document.querySelector('[data-testid="quick-payment-mode"]').value).toBe("Cash");
   });
 });

@@ -6,6 +6,7 @@ import { useFetch } from "../lib/useFetch";
 import api, { apiError } from "../lib/api";
 import { fmtDate, inr, indianNumber, moneyValue, todayISO } from "../lib/format";
 import { useAuth } from "../lib/auth";
+import QuickAdd from "../components/QuickAdd";
 
 export default function DailySpending() {
   const { user } = useAuth();
@@ -14,6 +15,7 @@ export default function DailySpending() {
   const [date, setDate] = useState(todayISO());
   const [form, setForm] = useState({ amount: "", category: "", account_id: "", payment_mode: "", transaction_status: "POSTED", description: "", project_id: "" });
   const [saving, setSaving] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const accounts = useFetch("/accounts");
   const settings = useFetch("/settings");
@@ -42,8 +44,8 @@ export default function DailySpending() {
         date,
         amount,
         category: form.category,
-        account_id: form.account_id || null,
-        payment_mode: form.payment_mode || null,
+        account_id: form.account_id === "__cash__" ? null : form.account_id || null,
+        payment_mode: form.account_id === "__cash__" ? "Cash" : form.payment_mode || null,
         transaction_status: form.transaction_status,
         description: form.description.trim(),
         ...(!householdUser ? { project_id: form.project_id || null } : {}),
@@ -61,10 +63,27 @@ export default function DailySpending() {
 
   const categoryOptions = settings.data?.expense_categories || [];
   const paymentOptions = settings.data?.payment_methods || [];
-  const usableAccounts = (accounts.data || []).filter((item) => !householdUser || item.access_level === "use");
+  const usableAccounts = (accounts.data || []).filter((item) =>
+    (!householdUser || item.access_level === "use") && (householdUser || item.type !== "CASH")
+  );
+  const selectAccount = (value) => {
+    setForm((current) => ({
+      ...current,
+      account_id: value,
+      ...(value === "__cash__" ? { payment_mode: "Cash" } : {}),
+    }));
+  };
+  const selectPaymentMode = (value) => {
+    setForm((current) => ({
+      ...current,
+      payment_mode: value,
+      ...(!householdUser && value === "Cash" ? { account_id: "__cash__" } :
+        current.account_id === "__cash__" && value !== "Cash" ? { account_id: "" } : {}),
+    }));
+  };
   return <>
     <PageHeader title="Daily Spending" subtitle="Record today's expenses quickly; they flow into your existing ledger, budgets, accounts, and calendar." icon={CreditCard}
-      actions={<Button variant="secondary" onClick={() => navigate("/expenses")}><ExternalLink size={15} /> Manage all expenses</Button>} />
+      actions={<><Button variant="secondary" onClick={() => navigate("/expenses")}><ExternalLink size={15} /> Manage all expenses</Button>{!householdUser && <Button className="sm:hidden" onClick={() => setQuickAddOpen(true)} data-testid="daily-quick-add"><PlusCircle size={15} /> Quick add expense</Button>}</>} />
     <div className="grid xl:grid-cols-[minmax(0,1fr)_minmax(20rem,.85fr)] gap-5">
       <Card className="p-5 sm:p-6">
         <div className="flex items-center gap-3 mb-5"><span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-light text-brand"><PlusCircle size={20} /></span><div><h2 className="font-display text-lg font-bold text-ink">Add an expense</h2><p className="text-xs text-subink">One entry is saved as one normal expense transaction.</p></div></div>
@@ -75,10 +94,10 @@ export default function DailySpending() {
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Category"><Select required value={form.category} onChange={(event) => set("category", event.target.value)} data-testid="daily-expense-category"><option value="">Choose category</option>{categoryOptions.map((item) => <option key={item} value={item}>{item}</option>)}</Select></Field>
-            <Field label="Payment method"><Select value={form.payment_mode} onChange={(event) => set("payment_mode", event.target.value)}><option value="">Not specified</option>{paymentOptions.map((item) => <option key={item} value={item}>{item}</option>)}</Select></Field>
+            <Field label="Payment method"><Select value={form.payment_mode} onChange={(event) => selectPaymentMode(event.target.value)} data-testid="daily-expense-payment-mode"><option value="">Not specified</option>{paymentOptions.map((item) => <option key={item} value={item}>{item}</option>)}</Select></Field>
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
-            <Field label={`Paid from account${householdUser ? " *" : ""}`}><Select required={householdUser} value={form.account_id} onChange={(event) => set("account_id", event.target.value)}><option value="">Unassigned</option>{usableAccounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
+            <Field label={`Paid from account${householdUser ? " *" : ""}`}><Select required={householdUser} value={form.account_id} onChange={(event) => selectAccount(event.target.value)} data-testid="daily-expense-account"><option value="">Choose an account</option>{!householdUser && <option value="__cash__">Cash (no account deduction)</option>}{usableAccounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>
             <Field label="Status"><Select value={form.transaction_status} onChange={(event) => set("transaction_status", event.target.value)}><option value="POSTED">Paid · Posted</option><option value="PENDING">Pending charge</option></Select></Field>
           </div>
           {!householdUser && <Field label="Project (optional)"><Select value={form.project_id} onChange={(event) => set("project_id", event.target.value)}><option value="">Personal expense</option>{(projects.data || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></Field>}
@@ -86,7 +105,7 @@ export default function DailySpending() {
           {errorMessage && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-expense">{errorMessage}</p>}
           <Button type="submit" className="w-full" disabled={saving || !settings.data || (householdUser && usableAccounts.length === 0)}>{saving ? "Saving expense…" : "Save expense"}</Button>
           {householdUser && usableAccounts.length === 0 && <p role="status" className="text-xs text-amber-700">You have view-only access. Ask the account owner for permission to record entries.</p>}
-          <p className="text-[11px] leading-relaxed text-subink">Posted entries affect recorded totals and the selected account balance. Pending entries stay visible but do not affect posted balances until you update their status.</p>
+          <p className="text-[11px] leading-relaxed text-subink">Posted entries affect recorded totals and the linked account balance, if one is selected. Pending entries stay visible but do not affect posted balances until you update their status.</p>
         </form>
       </Card>
       <Card className="overflow-hidden">
@@ -99,6 +118,7 @@ export default function DailySpending() {
         <div className="border-t border-line p-4 text-xs text-subink">Need to correct an entry? Use <button className="font-bold text-brand hover:underline" onClick={() => navigate("/expenses")}>Expenses</button> to edit it or mark it void while retaining a clear audit trail.</div>
       </Card>
     </div>
+    {!householdUser && <QuickAdd open={quickAddOpen} onClose={() => setQuickAddOpen(false)} initialType="EXPENSE" onDone={() => { setQuickAddOpen(false); transactions.refetch(true); }} />}
   </>;
 }
 

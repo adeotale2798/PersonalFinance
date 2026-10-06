@@ -22,6 +22,9 @@ export default function TxnPage({ type }) {
 
   const ready = accounts && settings && projects;
   const acctMap = Object.fromEntries((accounts || []).map((a) => [a.id, a.name]));
+  const usableAccounts = (accounts || []).filter((account) =>
+    (!householdUser || account.access_level === "use") && (isIncome || householdUser || account.type !== "CASH")
+  );
   const projMap = Object.fromEntries((projects || []).map((p) => [p.id, p.name]));
   const cats = isIncome ? settings?.income_categories : settings?.expense_categories;
 
@@ -29,8 +32,23 @@ export default function TxnPage({ type }) {
     { key: "date", label: "Date", type: "date", required: true, default: todayISO() },
     { key: "amount", label: "Amount (₹)", type: "money", required: true },
     { key: groupField, label: isIncome ? "Source" : "Category", type: "select", required: true, options: cats || [] },
-    { key: "account_id", label: "Account", type: "select", required: householdUser, options: (accounts || []).filter((a) => !householdUser || a.access_level === "use").map((a) => ({ value: a.id, label: a.name })) },
-    { key: "payment_mode", label: "Payment Mode", type: "select", options: settings?.payment_methods || [] },
+    { key: "account_id", label: "Account", type: "select", required: householdUser,
+      options: [...(!isIncome && !householdUser ? [{ value: "__cash__", label: "Cash (no account deduction)" }] : []),
+        ...usableAccounts.map((account) => ({ value: account.id, label: account.name }))],
+      editValue: (row) => !row.account_id && row.payment_mode === "Cash" ? "__cash__" : row.account_id || "",
+      onValueChange: (value, form, setField) => {
+        if (!isIncome && !householdUser) {
+          if (value === "__cash__") setField("payment_mode", "Cash");
+          else if (form.payment_mode === "Cash") setField("payment_mode", "");
+        }
+      } },
+    { key: "payment_mode", label: "Payment Mode", type: "select", options: settings?.payment_methods || [],
+      onValueChange: (value, form, setField) => {
+        if (!isIncome && !householdUser) {
+          if (value === "Cash") setField("account_id", "__cash__");
+          else if (form.account_id === "__cash__") setField("account_id", "");
+        }
+      } },
     { key: "transaction_status", label: "Posting Status", type: "select", options: ["POSTED", "PENDING"], default: "POSTED" },
     ...(!householdUser ? [{ key: "project_id", label: "Link to Project (optional)", type: "select", options: (projects || []).map((p) => ({ value: p.id, label: p.name })) }] : []),
     { key: "description", label: "Description", type: "text", full: true },
@@ -39,7 +57,7 @@ export default function TxnPage({ type }) {
   const columns = [
     { key: "date", label: "Date", type: "date" },
     { key: groupField, label: isIncome ? "Source" : "Category", render: (r) => <span className="font-medium text-ink">{r[groupField] || "—"}</span> },
-    { key: "account_id", label: "Account", render: (r) => acctMap[r.account_id] || "—" },
+    { key: "account_id", label: "Account", render: (r) => r.account_id ? (acctMap[r.account_id] || "—") : (r.payment_mode === "Cash" ? "Cash (no account)" : "—") },
     ...(!householdUser ? [{ key: "project_id", label: "Project", render: (r) => r.project_id ? <span className="text-brand text-xs font-medium">{projMap[r.project_id] || "Project"}</span> : <span className="text-faint text-xs">Personal</span> }] : []),
     { key: "description", label: "Note", render: (r) => <span className="text-subink">{r.description || "—"}</span> },
     { key: "record_status", label: "Record status", render: (r) => <div className="flex flex-wrap items-center gap-1.5"><Badge tone={r.transaction_status === "PENDING" ? "amber" : r.transaction_status === "VOID" ? "gray" : "green"}>{r.transaction_status === "PENDING" ? "Pending" : r.transaction_status === "VOID" ? "Void" : "Posted"}</Badge><span className="text-[10px] text-faint">{r.record_source || "MANUAL"}</span></div> },
@@ -80,7 +98,13 @@ export default function TxnPage({ type }) {
           canAdd={!householdUser || (accounts || []).some((account) => account.access_level === "use")}
           canDelete={!householdUser}
           canEditRow={(row) => !householdUser || (row.record_source !== "IMPORT" && (accounts || []).some((account) => account.id === row.account_id && account.access_level === "use"))}
-          transform={(p) => ({ ...p, type, scope: p.project_id ? "PROJECT" : "PERSONAL" })}
+          transform={(p) => ({
+            ...p,
+            account_id: p.account_id === "__cash__" ? null : p.account_id || null,
+            ...(p.account_id === "__cash__" ? { payment_mode: "Cash" } : {}),
+            type,
+            scope: p.project_id ? "PROJECT" : "PERSONAL",
+          })}
         />
       )}
     </>

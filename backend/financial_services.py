@@ -121,19 +121,34 @@ async def record_imported_transaction(*, run_id: str, row_number: int, entity_id
     return True
 
 
-async def snapshot_net_worth(net_worth: float, assets: float, liabilities: float, source: str = "derived") -> None:
+async def snapshot_net_worth(
+    net_worth: float,
+    assets: float,
+    liabilities: float,
+    source: str = "derived",
+    *,
+    replace_today: bool = False,
+) -> None:
     """One immutable daily snapshot. Historical gaps are never fabricated."""
     as_of = now_utc().date().isoformat()
+    values = {
+        "as_of": as_of,
+        "net_worth": round2(net_worth),
+        "total_assets": round2(assets),
+        "total_liabilities": round2(liabilities),
+        "source": source,
+        "created_at": now_utc(),
+    }
     await db.valuation_snapshots.update_one(
         {"as_of": as_of},
-        {"$setOnInsert": {"as_of": as_of, "net_worth": round2(net_worth), "total_assets": round2(assets), "total_liabilities": round2(liabilities), "source": source, "created_at": now_utc()}},
+        {"$set": values} if replace_today else {"$setOnInsert": values},
         upsert=True,
     )
 
 
 async def net_worth_history() -> list[dict]:
     rows = await db.valuation_snapshots.find({}).sort("as_of", 1).to_list(2000)
-    return [{"date": row["as_of"], "net_worth": round2(row.get("net_worth")), "assets": round2(row.get("total_assets")), "liabilities": round2(row.get("total_liabilities"))} for row in rows]
+    return [{"date": row["as_of"], "net_worth": round2(row.get("net_worth")), "assets": round2(row.get("total_assets")), "liabilities": round2(row.get("total_liabilities")), "source": row.get("source", "derived")} for row in rows]
 
 
 async def search_financial_records(query: str) -> list[dict]:
