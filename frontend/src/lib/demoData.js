@@ -253,9 +253,176 @@ const staticResponses = {
   "/notifications": { items: notifications, count: notifications.length },
 };
 let demoWalkthroughEnabled = true;
+let demoBudgets = [
+  { id: "demo-budget-household", month: monthKey(), category: "Household", category_key: "household", amount: 40000, budget_type: "MONTHLY", rollover: false, notes: "" },
+  { id: "demo-budget-food", month: monthKey(), category: "Food", category_key: "food", amount: 28000, budget_type: "MONTHLY", rollover: false, notes: "" },
+  { id: "demo-budget-emi", month: monthKey(), category: "EMI", category_key: "emi", amount: 50000, budget_type: "MONTHLY", rollover: false, notes: "" },
+  { id: "demo-budget-travel", month: monthKey(), category: "Travel", category_key: "travel", amount: 20000, budget_type: "MONTHLY", rollover: false, notes: "" },
+  { id: "demo-budget-medical", month: monthKey(), category: "Medical", category_key: "medical", amount: 12000, budget_type: "SINKING", rollover: true, notes: "Illustrative health reserve" },
+  { id: "demo-budget-medical-prior", month: monthKey(1), category: "Medical", category_key: "medical", amount: 12000, budget_type: "SINKING", rollover: true, notes: "" },
+];
+let demoReconciliations = [];
+let demoRecurring = [];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function recurringOverview() {
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const horizon = new Date(today);
+  horizon.setDate(horizon.getDate() + 90);
+  const items = demoRecurring.map((schedule) => {
+    const due = new Date(`${schedule.next_due_date}T00:00:00`);
+    const projected = [];
+    const anchor = due.getDate();
+    const cadenceMonths = { MONTHLY: 1, QUARTERLY: 3, YEARLY: 12 }[schedule.cadence];
+    for (let index = 0; schedule.status === "active" && due <= horizon && index < 100; index += 1) {
+      if (due >= new Date(`${todayIso}T00:00:00`)) projected.push({ due_date: `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`, amount: Number(schedule.amount), projected: true });
+      if (schedule.cadence === "WEEKLY") due.setDate(due.getDate() + 7);
+      else {
+        const next = new Date(due.getFullYear(), due.getMonth() + cadenceMonths, 1);
+        due.setTime(new Date(next.getFullYear(), next.getMonth(), Math.min(anchor, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate())).getTime());
+      }
+    }
+    const usage = schedule.last_used_date ? Math.max(0, Math.floor((new Date(`${todayIso}T00:00:00`) - new Date(`${schedule.last_used_date}T00:00:00`)) / 86400000)) : null;
+    const latestPrice = schedule.price_history?.[schedule.price_history.length - 1];
+    const nextDate = schedule.next_due_date;
+    const daysToDue = Math.floor((new Date(`${nextDate}T00:00:00`) - new Date(`${todayIso}T00:00:00`)) / 86400000);
+    return {
+      ...schedule,
+      usage_signal: { possibly_unused: schedule.status === "active" && usage !== null && usage >= 90, last_used_date: schedule.last_used_date || null, days_since_use: usage, threshold_days: 90, explanation: usage === null ? "Unknown: no explicitly dated last-used entry is recorded." : `Last recorded use was ${usage} days ago.` },
+      price_signal: latestPrice?.change_type === "increase" ? { ...latestPrice, explanation: "The saved amount increased; confirm the new price before renewal." } : null,
+      projected_occurrences: projected,
+      days_to_due: daysToDue,
+    };
+  });
+  const alerts = items.filter((item) => item.status === "active" && item.days_to_due <= 30).map((item) => ({
+    schedule_id: item.id, name: item.name, due_date: item.next_due_date, amount: item.amount, days_until_due: item.days_to_due,
+    message: item.days_to_due < 0 ? "Overdue" : item.days_to_due === 0 ? "Due today" : `Renews in ${item.days_to_due} days`,
+  })).sort((a, b) => a.due_date.localeCompare(b.due_date));
+  return { items, renewal_alerts: alerts, projection_horizon_days: 90, unused_threshold_days: 90 };
+}
+
+function simulateDemoDebt(loans, extra, startDate, strategy) {
+  const debts = loans.filter((loan) => Number(loan.outstanding) > 0).map((loan, index) => ({
+    id: loan.id || String(index), name: loan.name || "Loan", balance: Number(loan.outstanding), starting_balance: Number(loan.outstanding),
+    rate: Number(loan.interest_rate) || 0, emi: Number(loan.emi) || 0, interest_paid: 0, payoff_month: null, order: index,
+  }));
+  let totalInterest = 0;
+  const totalEmi = debts.reduce((sum, debt) => sum + debt.emi, 0);
+  let status = debts.length ? "horizon_exceeded" : "complete";
+  let months = 0;
+  for (let month = 1; debts.length && month <= 1200; month += 1) {
+    let capacity = strategy === "minimum_only" ? 0 : totalEmi + extra;
+    debts.forEach((debt) => {
+      if (debt.balance <= 0) return;
+      const interest = Math.round(debt.balance * debt.rate / 1200 * 100) / 100;
+      debt.balance += interest;
+      debt.interest_paid += interest;
+      totalInterest += interest;
+      const paid = Math.min(debt.emi, debt.balance);
+      debt.balance -= paid;
+      if (strategy !== "minimum_only") capacity -= paid;
+    });
+    const target = debts.filter((debt) => debt.balance > 0);
+    target.sort((a, b) => strategy === "avalanche" ? b.rate - a.rate || a.order - b.order : a.balance - b.balance || a.order - b.order);
+    if (strategy !== "minimum_only") target.forEach((debt) => {
+      const paid = Math.min(debt.balance, Math.max(0, capacity));
+      debt.balance -= paid;
+      capacity -= paid;
+    });
+    debts.forEach((debt) => {
+      if (debt.balance <= 0 && debt.payoff_month === null) {
+        debt.balance = 0;
+        debt.payoff_month = month;
+      }
+    });
+    months = month;
+    if (debts.every((debt) => debt.balance === 0)) { status = "complete"; break; }
+    if (debts.some((debt) => debt.emi <= debt.balance * debt.rate / 1200) && debts.every((debt) => debt.emi === 0 || debt.emi <= debt.balance * debt.rate / 1200)) { status = "impossible"; break; }
+  }
+  const addMonths = (offset) => {
+    const [year, month, day] = startDate.split("-").map(Number);
+    const cursor = new Date(year, month - 1 + offset, 1);
+    return `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(Math.min(day, new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate())).padStart(2, "0")}`;
+  };
+  const debtRows = debts.map((debt) => ({
+    id: debt.id, name: debt.name, starting_balance: debt.starting_balance, interest_paid: debt.interest_paid,
+    months: debt.payoff_month, payoff_date: debt.payoff_month ? addMonths(debt.payoff_month - 1) : null,
+    status: debt.payoff_month ? "paid_off" : "not_paid_within_horizon", remaining_balance: debt.balance,
+  }));
+  return {
+    strategy, status, months, payoff_date: status === "complete" ? addMonths(months - 1) : null,
+    total_interest: Math.round(totalInterest * 100) / 100,
+    total_paid: Math.round((debts.reduce((sum, debt) => sum + debt.starting_balance + debt.interest_paid - debt.balance, 0)) * 100) / 100,
+    debts: debtRows, payoff_order: debtRows.filter((debt) => debt.months !== null).sort((a, b) => a.months - b.months).map((debt) => debt.id),
+  };
+}
+
+function budgetOverview(month) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const nextMonth = monthNumber === 12 ? `${year + 1}-01` : `${year}-${String(monthNumber + 1).padStart(2, "0")}`;
+  const previousMonth = monthNumber === 1 ? `${year - 1}-12` : `${year}-${String(monthNumber - 1).padStart(2, "0")}`;
+  const saved = new Map(demoBudgets.filter((plan) => plan.month === month).map((plan) => [plan.category_key, plan]));
+  const previous = new Map(demoBudgets.filter((plan) => plan.month === previousMonth && plan.rollover).map((plan) => [plan.category_key, plan]));
+  const actual = new Map();
+  const pending = new Map();
+  const labels = new Map();
+  data.transactions.forEach((transaction) => {
+    if (transaction.type !== "EXPENSE" || transaction.scope === "PROJECT" || transaction.project_id) return;
+    if (transaction.date < `${month}-01` || transaction.date >= `${nextMonth}-01`) return;
+    const category = (transaction.category || "Uncategorized").trim();
+    const key = category.toLocaleLowerCase();
+    labels.set(key, category);
+    const target = transaction.transaction_status === "PENDING" ? pending : actual;
+    if (transaction.transaction_status === "VOID") return;
+    target.set(key, (target.get(key) || 0) + Number(transaction.amount || 0));
+  });
+  const priorSpent = new Map();
+  data.transactions.forEach((transaction) => {
+    if (transaction.type !== "EXPENSE" || transaction.scope === "PROJECT" || transaction.project_id || transaction.transaction_status === "PENDING" || transaction.transaction_status === "VOID") return;
+    if (transaction.date < `${previousMonth}-01` || transaction.date >= `${month}-01`) return;
+    const key = (transaction.category || "Uncategorized").trim().toLocaleLowerCase();
+    priorSpent.set(key, (priorSpent.get(key) || 0) + Number(transaction.amount || 0));
+  });
+  const keys = new Set([...saved.keys(), ...actual.keys(), ...pending.keys()]);
+  const items = Array.from(keys).sort().map((key) => {
+    const plan = saved.get(key) || {};
+    const previousPlan = previous.get(key);
+    const amount = Number(plan.amount || 0);
+    const carryover = plan.rollover && previousPlan ? Math.max(0, Number(previousPlan.amount || 0) - (priorSpent.get(key) || 0)) : 0;
+    const spent = actual.get(key) || 0;
+    const pendingAmount = pending.get(key) || 0;
+    const available = amount + carryover;
+    return {
+      ...plan,
+      category: plan.category || labels.get(key) || key,
+      month,
+      amount,
+      carryover,
+      available,
+      actual: spent,
+      pending: pendingAmount,
+      remaining: available - spent,
+      percent_used: available ? Math.round((spent / available) * 10000) / 100 : null,
+      unplanned: !saved.has(key),
+      budget_type: plan.budget_type || "MONTHLY",
+      rollover: Boolean(plan.rollover),
+    };
+  });
+  const sum = (key) => Math.round(items.reduce((total, item) => total + item[key], 0) * 100) / 100;
+  return {
+    month,
+    items,
+    planned_total: sum("amount"),
+    available_total: sum("available"),
+    actual_total: sum("actual"),
+    pending_total: sum("pending"),
+    remaining_total: sum("available") - sum("actual"),
+    unplanned_total: items.filter((item) => item.unplanned).reduce((total, item) => total + item.actual, 0),
+  };
 }
 
 function pathAndQuery(config) {
@@ -356,6 +523,98 @@ function enrichParty(party) {
 
 function responseForGet(path, query) {
   if (path === "/sitewalkthrough/status") return { enabled: demoWalkthroughEnabled };
+  if (path === "/recurring") return clone(recurringOverview());
+  if (path === "/calendar") {
+    const year = Number(query.get("year")) || new Date().getFullYear();
+    const month = Number(query.get("month"));
+    const day = query.get("day");
+    const start = day || `${year}-${String(month || 1).padStart(2, "0")}-01`;
+    const end = day || (month
+      ? `${year}-${String(month).padStart(2, "0")}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}`
+      : `${year}-12-31`);
+    const validRows = data.transactions.filter((item) =>
+      ["INCOME", "EXPENSE"].includes(item.type) && item.date >= start && item.date <= end
+    );
+    const totals = (items) => {
+      const result = { income: 0, expense: 0, pending_income: 0, pending_expense: 0, transaction_count: 0, pending_count: 0 };
+      items.forEach((item) => {
+        if (item.transaction_status === "VOID") return;
+        const pending = item.transaction_status === "PENDING";
+        const key = `${pending ? "pending_" : ""}${item.type.toLowerCase()}`;
+        result[key] += Number(item.amount || 0);
+        result[pending ? "pending_count" : "transaction_count"] += 1;
+      });
+      result.net = result.income - result.expense;
+      return result;
+    };
+    const commitments = [];
+    data.loans.forEach((loan) => {
+      if (!loan.next_due_date || !loan.emi || Number(loan.outstanding) <= 0 || loan.status === "Closed") return;
+      const due = new Date(`${loan.next_due_date}T00:00:00`);
+      if (Number.isNaN(due.getTime())) return;
+      const through = new Date(`${end}T00:00:00`);
+      const anchorDay = due.getDate();
+      for (let offset = 0; ; offset += 1) {
+        const lastDay = new Date(due.getFullYear(), due.getMonth() + offset + 1, 0).getDate();
+        const cursor = new Date(due.getFullYear(), due.getMonth() + offset, Math.min(anchorDay, lastDay));
+        if (cursor > through) break;
+        const occurrence = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        if (occurrence >= start && occurrence <= end && occurrence >= new Date().toISOString().slice(0, 10)) {
+          commitments.push({ id: `LOAN_EMI:${loan.id}:${occurrence}`, title: "Loan EMI", date: occurrence, amount: Number(loan.emi), kind: "LOAN_EMI", path: "/loans", detail: loan.name || loan.lender, source_id: loan.id, status: "SCHEDULED" });
+        }
+      }
+    });
+    demoRecurring.filter((item) => item.status === "active").forEach((item) => {
+      const due = new Date(`${item.next_due_date}T00:00:00`);
+      if (Number.isNaN(due.getTime())) return;
+      const through = new Date(`${end}T00:00:00`);
+      const anchorDay = due.getDate();
+      let cursor = new Date(due);
+      for (let count = 0; count < 2400 && cursor <= through; count += 1) {
+        const occurrence = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        if (occurrence >= start && occurrence >= new Date().toISOString().slice(0, 10)) commitments.push({ id: `RECURRING_BILL:${item.id}:${occurrence}`, title: item.name, date: occurrence, amount: Number(item.amount), kind: "RECURRING_BILL", path: "/recurring", detail: item.category, source_id: item.id, status: "SCHEDULED" });
+        const cadenceMonths = { MONTHLY: 1, QUARTERLY: 3, YEARLY: 12 }[item.cadence];
+        if (item.cadence === "WEEKLY") cursor.setDate(cursor.getDate() + 7);
+        else {
+          const nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + cadenceMonths, 1);
+          cursor = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), Math.min(anchorDay, new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0).getDate()));
+        }
+      }
+    });
+    const monthRows = Array.from({ length: 12 }, (_, index) => {
+      const key = `${year}-${String(index + 1).padStart(2, "0")}`;
+      const txns = validRows.filter((item) => item.date.startsWith(key));
+      const scheduled = commitments.filter((item) => item.date.startsWith(key));
+      return { month: key, ...totals(txns), scheduled_total: scheduled.reduce((sum, item) => sum + item.amount, 0), scheduled_count: scheduled.length, days_with_activity: new Set(txns.filter((item) => item.transaction_status !== "PENDING" && item.transaction_status !== "VOID").map((item) => item.date)).size };
+    });
+    const selectedCommitments = commitments.filter((item) => item.date >= start && item.date <= end);
+    const response = { view: day ? "day" : month ? "month" : "year", year, totals: totals(validRows), months: monthRows, commitments: selectedCommitments, scheduled_total: selectedCommitments.reduce((sum, item) => sum + item.amount, 0), scheduled_count: selectedCommitments.length };
+    if (month) {
+      const days = new Date(year, month, 0).getDate();
+      response.month = `${year}-${String(month).padStart(2, "0")}`;
+      response.days = Array.from({ length: days }, (_, index) => {
+        const iso = `${response.month}-${String(index + 1).padStart(2, "0")}`;
+        return { date: iso, ...totals(validRows.filter((item) => item.date === iso)), commitments: commitments.filter((item) => item.date === iso) };
+      });
+      response.commitments = selectedCommitments;
+    }
+    if (day) {
+      response.date = day;
+      response.transactions = clone(validRows.filter((item) => item.date === day));
+      response.commitments = selectedCommitments.filter((item) => item.date === day);
+    }
+    return response;
+  }
+  if (path === "/data-quality") {
+    const uncategorized = data.transactions.filter((item) =>
+      ["INCOME", "EXPENSE"].includes(item.type) && item.transaction_status !== "VOID"
+      && !(item.type === "EXPENSE" ? item.category : item.source)
+    );
+    return { generated_at: new Date().toISOString(), thresholds: { imported_balance_stale_days: 30, reconciliation_due_days: 90 }, counts: { stale_imported_balances: 0, reconciliation_due: 0, reconciliation_variances: 0, uncategorized_transactions: uncategorized.length, unassigned_transactions: 0 }, total_issues: uncategorized.length, findings: uncategorized.slice(0, 100).map((item) => ({ id: `uncategorized:${item.id}`, kind: "UNCATEGORIZED_TRANSACTION", severity: "LOW", title: `Uncategorized ${item.type.toLowerCase()}`, detail: `${item.date} · ${item.description || "Add a category or source."}`, path: item.type === "EXPENSE" ? "/expenses" : "/income", record_id: item.id, amount: item.amount })), truncated: uncategorized.length > 100 };
+  }
+  if (path === "/budgets") return budgetOverview(query.get("month") || monthKey());
+  const reconciliationHistory = path.match(/^\/accounts\/([^/]+)\/reconciliations$/);
+  if (reconciliationHistory) return clone(demoReconciliations.filter((item) => item.account_id === reconciliationHistory[1]));
   if (path === "/income/summary") return monthlySummary("INCOME", "source");
   if (path === "/expenses/summary") return monthlySummary("EXPENSE", "category");
   if (path === "/notifications") {
@@ -414,6 +673,8 @@ function responseForGet(path, query) {
       const value = query.get(key);
       if (value) rows = rows.filter((item) => item[key] === value);
     });
+    if (query.get("from")) rows = rows.filter((item) => item.date >= query.get("from"));
+    if (query.get("to")) rows = rows.filter((item) => item.date <= query.get("to"));
     return clone(rows.slice().sort((a, b) => b.date.localeCompare(a.date)));
   }
   if (path === "/lending/summary") {
@@ -441,8 +702,27 @@ function responseForGet(path, query) {
   }
   if (path === "/planning/actions") return { items: [{ id: "action-review", title: "Review upcoming insurance renewal", description: "Check the renewal options before the end of the month.", status: "OPEN", priority: "MEDIUM" }] };
   if (path === "/search") {
-    const q = (query.get("q") || "").toLowerCase();
-    const items = [...data.projects, ...data.accounts, ...data.lending].filter((item) => JSON.stringify(item).toLowerCase().includes(q)).slice(0, 8).map((item) => ({ title: item.name || item.counterparty, path: item.id?.startsWith("project") ? `/projects/${item.id}` : "/accounts", type: "Demo record" }));
+    const q = (query.get("q") || "").trim().toLowerCase();
+    if (q.length < 2) return { items: [] };
+    const searchable = [
+      ...data.projects.map((item) => ({ item, group: "PROJECTS", path: `/projects/${item.id}`, fields: ["name", "location", "description"] })),
+      ...data.accounts.map((item) => ({ item, group: "ACCOUNTS", path: "/accounts", fields: ["name", "bank_name", "masked_number"] })),
+      ...data.transactions.map((item) => ({ item, group: "TRANSACTIONS", path: "/cash-flow", fields: ["title", "description", "category", "source", "party"] })),
+      ...data.lending.map((item) => ({ item, group: "LENDING", path: "/lending", fields: ["counterparty", "purpose", "notes"] })),
+      ...data.investments.map((item) => ({ item, group: "INVESTMENTS", path: "/savings", fields: ["name", "symbol", "type"] })),
+      ...data.loans.map((item) => ({ item, group: "LOANS", path: "/loans", fields: ["name", "lender", "type"] })),
+      ...data.insurance.map((item) => ({ item, group: "INSURANCE", path: "/insurance", fields: ["policy_name", "provider", "insurer"] })),
+      ...data.goals.map((item) => ({ item, group: "GOALS", path: "/goals", fields: ["name", "description"] })),
+      ...data.family.map((item) => ({ item, group: "PEOPLE", path: "/family", fields: ["name", "relation"] })),
+      ...data.parties.map((item) => ({ item, group: "CONTRACTORS & PARTIES", path: "/projects", fields: ["name", "party_type", "scope"] })),
+    ];
+    const items = searchable.filter(({ item, fields }) => fields.some((field) => String(item[field] || "").toLowerCase().includes(q))).slice(0, 8).map(({ item, group, path }) => ({
+      group,
+      id: item.id,
+      label: item.name || item.description || item.source || item.category || item.counterparty || item.policy_name || "Untitled",
+      detail: item.type || item.category || item.party_type || item.date || "",
+      path,
+    }));
     return { items };
   }
   if (path === "/party-portal") return { project: projects[0], party: parties[1], work_logs: clone(workLogs), payments: [] };
@@ -451,6 +731,7 @@ function responseForGet(path, query) {
   if (path.startsWith("/error-logs")) return clone(staticResponses["/error-logs?scope=all"]);
   if (path === "/planning/inbox") return clone(staticResponses["/planning/inbox"]);
   if (path === "/planning/overview") return clone(staticResponses["/planning/overview"]);
+  if (path === "/debt-payoff/plan") return { status: "not_found" };
   if (path === "/planning/ownership") return clone(staticResponses["/planning/ownership"]);
   if (path === "/networth/history") return clone(netWorthHistory);
   if (path === "/farms/summary") return clone(staticResponses["/farms/summary"]);
@@ -461,6 +742,107 @@ function responseForGet(path, query) {
 
 function mutate(config, path, method) {
   const body = typeof config.data === "string" ? (() => { try { return JSON.parse(config.data); } catch (_) { return {}; } })() : (config.data || {});
+  if (method === "post" && path === "/debt-payoff/plan") {
+    const loans = data.loans.filter((loan) => !["closed", "paid", "paid off", "paid_off"].includes(String(loan.status || "Open").trim().toLowerCase()));
+    const startDate = body.start_date || new Date().toISOString().slice(0, 10);
+    return {
+      extra_monthly: Number(body.extra_monthly) || 0,
+      currency: "INR",
+      max_months: 1200,
+      minimum_only: simulateDemoDebt(loans, 0, startDate, "minimum_only"),
+      avalanche: simulateDemoDebt(loans, Number(body.extra_monthly) || 0, startDate, "avalanche"),
+      snowball: simulateDemoDebt(loans, Number(body.extra_monthly) || 0, startDate, "snowball"),
+    };
+  }
+  if (method === "post" && path === "/recurring") {
+    const created = { id: `demo-recurring-${Date.now()}`, status: "active", last_used_date: null, price_history: [], ...body };
+    demoRecurring.unshift(created);
+    return clone(created);
+  }
+  const recurringPath = path.match(/^\/recurring\/([^/]+)(?:\/(status|record-payment))?$/);
+  if (recurringPath && method === "put") {
+    const schedule = demoRecurring.find((item) => item.id === recurringPath[1]);
+    if (!schedule) return { status: "not_found" };
+    if (Number(body.amount) !== Number(schedule.amount)) {
+      schedule.price_history = [...(schedule.price_history || []), { from_amount: Number(schedule.amount), to_amount: Number(body.amount), change_type: Number(body.amount) > Number(schedule.amount) ? "increase" : "decrease", changed_on: new Date().toISOString().slice(0, 10) }];
+    }
+    Object.assign(schedule, body);
+    return clone(schedule);
+  }
+  if (recurringPath && method === "patch" && recurringPath[2] === "status") {
+    const schedule = demoRecurring.find((item) => item.id === recurringPath[1]);
+    if (schedule) schedule.status = body.status;
+    return clone(schedule || body);
+  }
+  if (recurringPath && method === "post" && recurringPath[2] === "record-payment") {
+    const schedule = demoRecurring.find((item) => item.id === recurringPath[1]);
+    if (!schedule) return { status: "not_found" };
+    const transaction = { id: `demo-recurring-payment-${Date.now()}`, type: "EXPENSE", date: body.date, amount: Number(body.amount) || Number(schedule.amount), category: schedule.category, account_id: schedule.account_id, description: `${schedule.name} recurring payment`, transaction_status: "POSTED", record_source: "MANUAL", recurring_id: schedule.id, scope: "PERSONAL" };
+    data.transactions.unshift(transaction);
+    const account = data.accounts.find((item) => item.id === schedule.account_id);
+    if (account) account.current_balance -= transaction.amount;
+    schedule.last_used_date = body.date;
+    const due = new Date(`${schedule.next_due_date}T00:00:00`);
+    const anchor = due.getDate();
+    const paid = new Date(`${body.date}T00:00:00`);
+    for (let count = 0; due <= paid && count < 1200; count += 1) {
+      if (schedule.cadence === "WEEKLY") due.setDate(due.getDate() + 7);
+      else {
+        const step = { MONTHLY: 1, QUARTERLY: 3, YEARLY: 12 }[schedule.cadence] || 1;
+        const next = new Date(due.getFullYear(), due.getMonth() + step, 1);
+        due.setTime(new Date(next.getFullYear(), next.getMonth(), Math.min(anchor, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate())).getTime());
+      }
+    }
+    schedule.next_due_date = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`;
+    return clone({ transaction, schedule });
+  }
+  if (method === "post" && path === "/budgets") {
+    const category = String(body.category || "").trim();
+    const categoryKey = category.toLocaleLowerCase();
+    const index = demoBudgets.findIndex((item) => item.month === body.month && item.category_key === categoryKey);
+    const plan = {
+      ...(index >= 0 ? demoBudgets[index] : { id: `demo-budget-${Date.now()}` }),
+      ...body,
+      category,
+      category_key: categoryKey,
+      amount: Number(body.amount) || 0,
+    };
+    if (index >= 0) demoBudgets[index] = plan;
+    else demoBudgets.push(plan);
+    return budgetOverview(body.month);
+  }
+  const budgetMatch = path.match(/^\/budgets\/([^/]+)$/);
+  if (method === "delete" && budgetMatch) {
+    const index = demoBudgets.findIndex((item) => item.id === budgetMatch[1]);
+    if (index < 0) return { status: "not_found" };
+    demoBudgets.splice(index, 1);
+    return { status: "deleted" };
+  }
+  const reconcileMatch = path.match(/^\/accounts\/([^/]+)\/reconcile$/);
+  if (method === "post" && reconcileMatch) {
+    const account = data.accounts.find((item) => item.id === reconcileMatch[1]);
+    if (!account) return { status: "not_found" };
+    const statementBalance = Number(body.statement_balance) || 0;
+    const appBalance = Number(account.current_balance) || 0;
+    const difference = Math.round((statementBalance - appBalance) * 100) / 100;
+    const record = {
+      id: `demo-reconciliation-${Date.now()}`,
+      account_id: account.id,
+      account_name: account.name,
+      as_of_date: body.as_of_date,
+      statement_balance: statementBalance,
+      app_balance: appBalance,
+      difference,
+      status: Math.abs(difference) < 0.01 ? "MATCHED" : "VARIANCE",
+      note: body.note || "",
+      recorded_by: "demo.admin@nivara.app",
+      created_at: new Date().toISOString(),
+    };
+    demoReconciliations.unshift(record);
+    account.reconciliation_status = record.status;
+    account.last_reconciled_at = record.created_at;
+    return clone(record);
+  }
   if (method === "put" && path === "/sitewalkthrough/status" && typeof body.enabled === "boolean") {
     demoWalkthroughEnabled = body.enabled;
     return { enabled: demoWalkthroughEnabled };
@@ -524,7 +906,9 @@ function mutate(config, path, method) {
     };
     if (path === "/transactions") {
       const account = data.accounts.find((item) => item.id === created.account_id);
-      if (account) {
+      created.transaction_status = created.transaction_status || "POSTED";
+      created.record_source = created.record_source || "MANUAL";
+      if (account && !["PENDING", "VOID"].includes(created.transaction_status)) {
         const amount = Number(created.amount) || 0;
         account.current_balance += created.type === "INCOME" ? amount : created.type === "EXPENSE" ? -amount : 0;
       }

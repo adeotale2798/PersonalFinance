@@ -93,19 +93,20 @@ export default function QuickAdd({ open, onClose, onDone }) {
   const isTxn = type === "INCOME" || type === "EXPENSE";
 
   return (
-    <Modal open={open} onClose={onClose} title="Record a transaction">
-      <div className="grid grid-cols-4 gap-2 mb-5">
-        {TYPES.map((t) => (
-          <button key={t.key} onClick={() => setType(t.key)} data-testid={`quick-type-${t.key}`}
-            className={cx("flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-semibold transition-all",
-              type === t.key ? "border-brand bg-brand-light text-brand-dark" : "border-line text-subink hover:bg-muted")}>
-            <t.icon size={18} className={type === t.key ? "text-brand" : t.tone} />
-            {t.label}
-          </button>
-        ))}
-      </div>
+    <Modal open={open} onClose={onClose} title="Record a transaction" panelClassName="quick-add-modal" contentClassName="quick-add-modal-content">
+      <div className="quick-add-modal-layout">
+        <div className="grid grid-cols-4 gap-2 mb-5">
+          {TYPES.map((t) => (
+            <button key={t.key} onClick={() => setType(t.key)} data-testid={`quick-type-${t.key}`}
+              className={cx("flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-semibold transition-all",
+                type === t.key ? "border-brand bg-brand-light text-brand-dark" : "border-line text-subink hover:bg-muted")}>
+              <t.icon size={18} className={type === t.key ? "text-brand" : t.tone} />
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-      <div className="space-y-3">
+        <div className="quick-add-fields space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Amount (₹)"><Input inputMode="decimal" autoFocus value={indianNumber(form.amount)} onChange={(e) => set("amount", moneyValue(e.target.value))} placeholder="0" data-testid="quick-amount" /></Field>
           <Field label="Date"><Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} data-testid="quick-date" /></Field>
@@ -161,7 +162,9 @@ export default function QuickAdd({ open, onClose, onDone }) {
 
         {error && <div className="text-sm text-expense bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" data-testid="quick-error">{error}</div>}
 
-        <div className="flex gap-2 pt-1">
+        </div>
+
+        <div className="quick-add-actions flex gap-2 pt-1">
           <Button variant="secondary" className="flex-1" onClick={onClose}>Cancel</Button>
           <Button className="flex-1" onClick={submit} disabled={saving} data-testid="quick-submit">{saving ? "Saving…" : "Save"}</Button>
         </div>

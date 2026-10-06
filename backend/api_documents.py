@@ -1,6 +1,7 @@
 """Documents: upload, list, download via Emergent object storage."""
-import os
 import uuid
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.responses import Response
 from core import db, raw_db, serialize, oid, now_utc, require_admin, get_current_user, workspace_for, set_workspace
@@ -14,17 +15,18 @@ MAX_SIZE = 25 * 1024 * 1024
 
 
 @router.get("/documents")
-async def list_documents(category: str = None, related_entity_id: str = None, folder: str = None,
-                         financial_year: str = None, family_member_id: str = None, project_id: str = None,
-                         party_id: str = None, user: dict = Depends(get_current_user)):
+async def list_documents(category: str | None = None, related_entity_id: str | None = None, folder: str | None = None,
+                         financial_year: str | None = None, family_member_id: str | None = None, project_id: str | None = None,
+                         party_id: str | None = None, related_entity_type: str | None = None, user: dict = Depends(get_current_user)):
     is_party = user.get("role") == "PARTY_USER"
     if not is_party and user.get("role") not in ("SUPER_ADMIN", "PROJECT_ADMIN"):
         raise HTTPException(status_code=403, detail="Admin or party access required")
-    q = {"deleted_at": {"$exists": False}}
+    q: dict[str, Any] = {"deleted_at": {"$exists": False}}
     if is_party:
         q["party_id"] = user.get("party_id")
     if category: q["category"] = category
     if related_entity_id: q["related_entity_id"] = related_entity_id
+    if related_entity_type: q["related_entity_type"] = related_entity_type
     if folder: q["folder"] = folder
     if financial_year: q["financial_year"] = financial_year
     if family_member_id: q["family_member_id"] = family_member_id
@@ -65,7 +67,10 @@ async def upload_document(
     if not is_party and user.get("role") not in ("SUPER_ADMIN", "PROJECT_ADMIN"):
         raise HTTPException(status_code=403, detail="Admin or party access required")
     if is_party:
-        party_id = user.get("party_id")
+        user_party_id = user.get("party_id")
+        if not isinstance(user_party_id, str) or not user_party_id:
+            raise HTTPException(status_code=403, detail="Party profile is not configured")
+        party_id = user_party_id
         party = await db.parties.find_one({"_id": oid(party_id), "deleted_at": {"$exists": False}})
         if not party:
             raise HTTPException(status_code=404, detail="Party profile not found")
@@ -147,6 +152,8 @@ async def download_document(item_id: str, authorization: str = Header(None), aut
     user = await raw_db.users.find_one({"_id": oid(payload["sub"]), "active": {"$ne": False}})
     if not user:
         raise HTTPException(status_code=401, detail="User not found or inactive")
+    if user.get("role") == "HOUSEHOLD_USER":
+        raise HTTPException(status_code=403, detail="Document access is not included in household account sharing")
     set_workspace(workspace_for(user))
     doc = await db.documents.find_one({"_id": oid(item_id)})
     if not doc:

@@ -1,7 +1,8 @@
 """Nivara Finance API entrypoint."""
+from contextlib import asynccontextmanager
 import os
 import logging
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -13,7 +14,14 @@ from core import db, raw_db, hash_password, verify_password, now_utc, set_worksp
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nivara")
 
-app = FastAPI(title="Nivara Finance API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    yield
+
+
+app = FastAPI(title="Nivara Finance API", version="0.1.0", lifespan=lifespan)
 
 api = APIRouter(prefix="/api")
 
@@ -47,15 +55,64 @@ from api_proof import router as proof_router
 from api_planning import router as planning_router
 from api_version import router as version_router
 from api_imports import router as imports_router
+from api_budgets import router as budgets_router
+from api_calendar import router as calendar_router
+from api_data_quality import router as data_quality_router
+from api_recurring import router as recurring_router
+from api_debt_payoff import router as debt_payoff_router
+from api_cgas import router as cgas_router
 
 for r in (auth_router, finance_router, lending_router, wealth_router, rental_router,
           projects_router, admin_router, dashboard_router, documents_router,
           insurance_router, farms_router, loans_router, export_router, losses_router, notifications_router, diary_router, errors_router, necessities_router, goals_router, proof_router, planning_router, version_router, imports_router):
     api.include_router(r)
+api.include_router(budgets_router)
+api.include_router(calendar_router)
+api.include_router(data_quality_router)
+api.include_router(recurring_router)
+api.include_router(debt_payoff_router)
+api.include_router(cgas_router)
 
 app.include_router(api)
 
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
+
+
+def validate_production_config(config=None):
+    """Fail closed when production is selected with development-grade settings."""
+    config = os.environ if config is None else config
+    if config.get("APP_ENV", "development").strip().lower() != "production":
+        return
+
+    problems = []
+    jwt_secret = config.get("JWT_SECRET", "")
+    if len(jwt_secret.encode("utf-8")) < 32 or jwt_secret == "replace-this-with-a-long-random-secret":
+        problems.append("JWT_SECRET must be a unique value of at least 32 bytes")
+
+    admin_password = config.get("ADMIN_PASSWORD", "")
+    if len(admin_password) < 16 or admin_password == "Nivara@2026":
+        problems.append("ADMIN_PASSWORD must be unique and at least 16 characters")
+
+    origins = [origin.strip() for origin in config.get("CORS_ORIGINS", "").split(",") if origin.strip()]
+    if not origins or any(
+        origin == "*" or urlsplit(origin).scheme != "https" or not urlsplit(origin).netloc
+        or urlsplit(origin).path not in ("", "/") or urlsplit(origin).query or urlsplit(origin).fragment
+        for origin in origins
+    ):
+        problems.append("CORS_ORIGINS must contain only explicit HTTPS origins")
+
+    mongo_url = urlsplit(config.get("MONGO_URL", ""))
+    mongo_options = dict(parse_qsl(mongo_url.query, keep_blank_values=True))
+    if mongo_url.scheme != "mongodb+srv" and mongo_options.get("tls", mongo_options.get("ssl", "")).lower() != "true":
+        problems.append("MONGO_URL must use TLS")
+
+    if config.get("NIVARA_E2E_DEMO", "").lower() == "true":
+        problems.append("NIVARA_E2E_DEMO must be disabled")
+
+    if problems:
+        raise RuntimeError("Invalid production configuration: " + "; ".join(problems))
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in CORS_ORIGINS.split(",")] if CORS_ORIGINS != "*" else ["*"],
@@ -123,8 +180,8 @@ async def migrate_legacy_workspace_data() -> str:
     return workspace_id
 
 
-@app.on_event("startup")
 async def startup():
+    validate_production_config()
     e2e_demo_mode = os.environ.get("NIVARA_E2E_DEMO", "").lower() == "true"
     if e2e_demo_mode:
         from core import DB_NAME, MONGO_URL
@@ -135,6 +192,7 @@ async def startup():
         await raw_db.login_attempts.create_index("identifier")
         await raw_db.transactions.create_index([("workspace_id", 1), ("date", -1)])
         await raw_db.transactions.create_index([("workspace_id", 1), ("project_id", 1)])
+        await raw_db.budgets.create_index([("workspace_id", 1), ("month", 1), ("category_key", 1)], unique=True)
         from financial_services import ensure_indexes
         await ensure_indexes()
     except Exception as e:

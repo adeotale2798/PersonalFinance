@@ -2,6 +2,10 @@
 
 The application version source of truth is [backend/version_history.json](backend/version_history.json). The in-app **What's new** panel reads this same file through the API.
 
+## 1.5.3 — 2026-10-06
+
+- Workspace admins cannot promote users to finance owners; production startup validates secrets, CORS origins, and MongoDB TLS.
+
 ## 1.5.2 — 2026-09-20
 
 - Immediate cache invalidation and background data revalidation; party deletion now removes its linked portal data.

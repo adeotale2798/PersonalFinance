@@ -18,7 +18,7 @@ function FieldInput({ f, value, onChange }) {
 
 export default function CrudManager({
   title, endpoint, listEndpoint, fields, columns, onChanged, addLabel = "Add", emptyText,
-  canEdit = true, canDelete = true, deps = [], transform, rowClassName,
+  canAdd = true, canEdit = true, canDelete = true, canEditRow, canDeleteRow, deps = [], transform, rowClassName,
   onRowClick, openSignal, onCreated,
 }) {
   const { data, loading, error, refetch } = useFetch(listEndpoint || endpoint, deps);
@@ -65,15 +65,17 @@ export default function CrudManager({
     if (c.type === "date") return fmtDate(v);
     return v ?? "—";
   };
+  const primaryCol = cols[0];
+  const metricCol = cols.slice(1).find((c) => c.type === "money");
 
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-line">
         <h3 className="font-display font-semibold text-ink">{title}</h3>
-        <Button size="sm" onClick={openAdd} data-testid={`add-${title.replace(/\s+/g, "-").toLowerCase()}`}><Plus size={15} /> {addLabel}</Button>
+        {canAdd && <Button size="sm" onClick={openAdd} data-testid={`add-${title.replace(/\s+/g, "-").toLowerCase()}`}><Plus size={15} /> {addLabel}</Button>}
       </div>
       <StateBlock loading={loading} error={error} empty={rows.length === 0} emptyText={emptyText || "No records yet — add your first one."} onRetry={refetch}>
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-[1] bg-slate-50/95 backdrop-blur text-faint overline border-b border-line">
               <tr>{cols.map((c) => <th key={c.key} className={cx("px-4 py-2.5 whitespace-nowrap", c.align === "right" && "text-right")}>{c.label}</th>)}
@@ -85,14 +87,46 @@ export default function CrudManager({
                   {cols.map((c) => <td key={c.key} className={cx("px-4 py-3 text-ink/90", c.align === "right" && "text-right num")}>{renderCell(row, c)}</td>)}
                   {(canEdit || canDelete) && (
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {canEdit && <button onClick={(event) => { event.stopPropagation(); openEdit(row); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" data-testid={`edit-${row.id}`}><Pencil size={15} /></button>}
-                      {canDelete && <button onClick={(event) => { event.stopPropagation(); remove(row); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-expense" data-testid={`delete-${row.id}`}><Trash2 size={15} /></button>}
+                      {canEdit && (!canEditRow || canEditRow(row)) && <button aria-label={`Edit ${row[primaryCol.key] || title}`} onClick={(event) => { event.stopPropagation(); openEdit(row); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" data-testid={`edit-${row.id}`}><Pencil size={15} /></button>}
+                      {canDelete && (!canDeleteRow || canDeleteRow(row)) && <button aria-label={`Delete ${row[primaryCol.key] || title}`} onClick={(event) => { event.stopPropagation(); remove(row); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-expense" data-testid={`delete-${row.id}`}><Trash2 size={15} /></button>}
                     </td>
                   )}
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="divide-y divide-line/70 md:hidden" data-testid="crud-mobile-list">
+          {rows.map((row) => (
+            <article key={row.id} className={cx("px-4 py-4", rowClassName && rowClassName(row))} data-testid={`crud-mobile-row-${row.id}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  {onRowClick ? (
+                    <button type="button" onClick={() => onRowClick(row)} className="min-h-11 max-w-full text-left font-semibold text-ink break-words">
+                      {renderCell(row, primaryCol)}
+                    </button>
+                  ) : (
+                    <div className="font-semibold text-ink break-words">{renderCell(row, primaryCol)}</div>
+                  )}
+                </div>
+                {metricCol && <div className="shrink-0 text-right">{renderCell(row, metricCol)}</div>}
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3">
+                {cols.filter((c) => c.key !== primaryCol.key && c.key !== metricCol?.key).map((c) => (
+                  <div key={c.key} className="min-w-0">
+                    <dt className="text-[10px] font-semibold uppercase tracking-wide text-faint">{c.label}</dt>
+                    <dd className="mt-0.5 break-words text-xs text-ink/90">{renderCell(row, c)}</dd>
+                  </div>
+                ))}
+              </dl>
+              {(canEdit || canDelete) && (
+                <div className="mt-3 flex justify-end gap-2">
+                  {canEdit && (!canEditRow || canEditRow(row)) && <button aria-label={`Edit ${row[primaryCol.key] || title}`} onClick={() => openEdit(row)} className="flex min-h-11 min-w-11 items-center justify-center rounded-xl text-subink hover:bg-muted hover:text-brand" data-testid={`mobile-edit-${row.id}`}><Pencil size={17} /></button>}
+                  {canDelete && (!canDeleteRow || canDeleteRow(row)) && <button aria-label={`Delete ${row[primaryCol.key] || title}`} onClick={() => remove(row)} className="flex min-h-11 min-w-11 items-center justify-center rounded-xl text-subink hover:bg-rose-50 hover:text-expense" data-testid={`mobile-delete-${row.id}`}><Trash2 size={17} /></button>}
+                </div>
+              )}
+            </article>
+          ))}
         </div>
       </StateBlock>
 

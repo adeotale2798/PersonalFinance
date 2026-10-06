@@ -7,6 +7,7 @@ import KpiCard from "../components/KpiCard";
 import { ChartCard, Bars, CashFlowArea, Donut } from "../components/charts";
 import CrudManager from "../components/CrudManager";
 import DocumentsPanel from "../components/DocumentsPanel";
+import ConstructionCgas from "../components/ConstructionCgas";
 import api, { docUrl } from "../lib/api";
 import { inr, todayISO } from "../lib/format";
 
@@ -134,7 +135,7 @@ export default function ProjectWorkspace() {
 
           <div className="mb-6 flex gap-3 items-center justify-between">
             <div className="overflow-x-auto -mx-1 px-1"><Segmented testid="proj-tabs" value={tab} onChange={setTab}
-              options={[{ value: "overview", label: "Overview" }, { value: "finance", label: "Finance" }, { value: "work", label: "Work" }, { value: "parties", label: "Parties" }, { value: "documents", label: "Documents" }]} /></div>
+              options={[{ value: "overview", label: "Overview" }, { value: "finance", label: "Finance" }, { value: "work", label: "Work" }, { value: "parties", label: "Parties" }, { value: "documents", label: "Documents" }, ...(["construction", "renovation"].includes((p.type || "").toLowerCase()) ? [{ value: "cgas", label: "CGAS" }] : [])]} /></div>
             <Button size="sm" className="shrink-0" onClick={() => { setTab("finance"); setExpenseSignal((x) => x + 1); }} data-testid="project-quick-expense"><Plus size={15} /> Add Expense</Button>
           </div>
 
@@ -187,6 +188,7 @@ export default function ProjectWorkspace() {
               )}
 
               {tab === "documents" && <DocumentsPanel projectId={id} title="Project Documents (Official & Unofficial)" showOfficial defaultCategory="Project" />}
+              {tab === "cgas" && <ConstructionCgas projectId={id} />}
             </>
           )}
           <Modal open={!!partyModal} onClose={() => { partyModal?.resolve?.(null); setPartyModal(null); }} title="Add a project party" size="lg">

@@ -121,7 +121,11 @@ async def planning_overview(user: dict = Depends(require_admin)):
     balances, _ = await compute_account_balances()
     cash_on_hand = round2(sum(balances.values()))
     month = today.strftime("%Y-%m")
-    transactions = await db.transactions.find({"deleted_at": {"$exists": False}, "date": {"$gte": f"{month}-01", "$lte": horizon}}).to_list(10000)
+    transactions = await db.transactions.find({
+        "deleted_at": {"$exists": False},
+        "transaction_status": {"$nin": ["PENDING", "VOID"]},
+        "date": {"$gte": f"{month}-01", "$lte": horizon},
+    }).to_list(10000)
     actual_income = round2(sum(t.get("amount", 0) for t in transactions if t.get("type") == "INCOME"))
     actual_expense = round2(sum(t.get("amount", 0) for t in transactions if t.get("type") == "EXPENSE"))
     scheduled_out = round2(sum(item["amount"] for item in due_soon if item["kind"] in OUTGOING_KINDS))
@@ -144,7 +148,12 @@ async def planning_overview(user: dict = Depends(require_admin)):
     liquid_months = round(cash_on_hand / actual_expense, 1) if actual_expense > 0 else None
     insurance_count = len(policies)
     month_start = (today - timedelta(days=90)).isoformat()
-    income_90 = round2(sum(t.get("amount", 0) for t in await db.transactions.find({"deleted_at": {"$exists": False}, "type": "INCOME", "date": {"$gte": month_start}}).to_list(10000)))
+    income_90 = round2(sum(t.get("amount", 0) for t in await db.transactions.find({
+        "deleted_at": {"$exists": False},
+        "transaction_status": {"$nin": ["PENDING", "VOID"]},
+        "type": "INCOME",
+        "date": {"$gte": month_start},
+    }).to_list(10000)))
     monthly_income = round2(income_90 / 3) if income_90 else 0
     loans_total = round2(sum(x.get("outstanding", 0) for x in await db.loans.find({"deleted_at": {"$exists": False}, "status": {"$ne": "Closed"}}).to_list(500)))
     other_debt = round2(sum(x.get("outstanding", 0) for x in await db.liabilities.find({"deleted_at": {"$exists": False}}).to_list(2000)))

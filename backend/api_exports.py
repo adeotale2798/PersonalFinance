@@ -1,6 +1,6 @@
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -111,7 +111,7 @@ async def export_data(request: Request, user: dict = Depends(require_admin), ent
     rows = await _fetch_rows(entity, query_filters)
     workbook = build_workbook(rows)
     safe_entity = entity.strip().lower().replace("-", "_")
-    filename = f"{safe_entity}_export_{__import__('datetime').datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"{safe_entity}_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return StreamingResponse(
         workbook,
@@ -130,7 +130,8 @@ async def financial_snapshot(user: dict = Depends(require_admin)):
     plan = await planning_overview(user)
     ownership = await ownership_summary(user)
     wb = Workbook(); summary = wb.active; summary.title = "Financial snapshot"
-    rows = [["Nivara Financial Snapshot"], ["Generated at", datetime.utcnow().isoformat() + "Z"], ["Status", "Self-attested household record — verify with original documents before sharing"], [], ["Net worth", wealth["net_worth"]], ["Total assets", wealth["total_assets"]], ["Total liabilities", wealth["total_liabilities"]], ["Cash on hand", plan["forecast"]["cash_on_hand"]], ["Minimum projected balance", plan["forecast"]["minimum_balance"]], ["Minimum balance date", plan["forecast"]["minimum_balance_date"]], ["Financial health score", plan["health"]["score"]]]
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    rows = [["Nivara Financial Snapshot"], ["Generated at", generated_at], ["Status", "Self-attested household record — verify with original documents before sharing"], [], ["Net worth", wealth["net_worth"]], ["Total assets", wealth["total_assets"]], ["Total liabilities", wealth["total_liabilities"]], ["Cash on hand", plan["forecast"]["cash_on_hand"]], ["Minimum projected balance", plan["forecast"]["minimum_balance"]], ["Minimum balance date", plan["forecast"]["minimum_balance_date"]], ["Financial health score", plan["health"]["score"]]]
     for row in rows: summary.append(row)
     summary["A1"].font = Font(bold=True, size=16); summary["A1"].fill = PatternFill("solid", fgColor="D1FAE5")
     for c in summary[1]: c.font = Font(bold=True)
@@ -151,4 +152,4 @@ async def financial_snapshot(user: dict = Depends(require_admin)):
         for column in sheet.columns:
             sheet.column_dimensions[column[0].column_letter].width = min(max(max(len(str(c.value or "")) for c in column) + 2, 14), 55)
     buffer = io.BytesIO(); wb.save(buffer); buffer.seek(0)
-    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="nivara_financial_snapshot_{datetime.utcnow().strftime("%Y%m%d")}.xlsx"'})
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="nivara_financial_snapshot_{datetime.now(timezone.utc).strftime("%Y%m%d")}.xlsx"'})

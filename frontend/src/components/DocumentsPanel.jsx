@@ -7,8 +7,10 @@ import { fmtDate } from "../lib/format";
 
 const DEFAULT_CATS = ["Project", "Bank", "Payment", "Contract", "Invoice", "Receipt", "Loan", "Lending", "Goal", "Investment", "Drawing", "Certificate", "ITR", "Income Tax", "Income Proof", "Identity", "Property", "Insurance", "Other"];
 
-export default function DocumentsPanel({ projectId, title = "Documents", query = "", categories, memberOptions, showOfficial = false, showTaxFields = false, showLinks = false, defaultCategory = "Other", onChanged }) {
-  const base = projectId ? `/documents?related_entity_id=${projectId}` : "/documents";
+export default function DocumentsPanel({ projectId, relatedEntityId, relatedEntityType, title = "Documents", query = "", categories, memberOptions, showOfficial = false, showTaxFields = false, showLinks = false, defaultCategory = "Other", onChanged }) {
+  const entityId = relatedEntityId || projectId;
+  const entityType = relatedEntityType || (projectId ? "project" : "");
+  const base = entityId ? `/documents?related_entity_id=${encodeURIComponent(entityId)}${entityType ? `&related_entity_type=${encodeURIComponent(entityType)}` : ""}` : "/documents";
   const url = query ? `${base}${base.includes("?") ? "&" : "?"}${query}` : base;
   const { data, loading, error, refetch } = useFetch(url, [url]);
   const links = useFetch("/documents/link-options");
@@ -38,7 +40,8 @@ export default function DocumentsPanel({ projectId, title = "Documents", query =
       if (showTaxFields && form.financial_year) fd.append("financial_year", form.financial_year);
       if (memberOptions && form.family_member_id) fd.append("family_member_id", form.family_member_id);
       if (showLinks && form.related_entity_id) { fd.append("related_entity_id", form.related_entity_id); fd.append("related_entity_type", form.related_entity_type); }
-      if (projectId) { fd.append("related_entity_id", projectId); fd.append("related_entity_type", "project"); fd.append("project_id", projectId); }
+      if (entityId && entityType) { fd.append("related_entity_id", entityId); fd.append("related_entity_type", entityType); }
+      if (projectId) fd.append("project_id", projectId);
       await api.post("/documents", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setOpen(false); setFile(null); setForm({ category: defaultCategory, official: "true" });
       refetch(); onChanged && onChanged();

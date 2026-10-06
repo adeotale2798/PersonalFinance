@@ -32,7 +32,27 @@ export function fmtMonth(m) {
 }
 
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  const timezone = localStorage.getItem("nivara_timezone") || "Asia/Kolkata";
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (_) {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+export function isoDateInTimezone(date = new Date()) {
+  const timezone = localStorage.getItem("nivara_timezone") || "Asia/Kolkata";
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (_) {
+    return date.toISOString().slice(0, 10);
+  }
 }
 
 export function fmtDateTime(d) {

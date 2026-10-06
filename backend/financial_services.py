@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import defaultdict
-from datetime import datetime, timezone
 
 from core import db, raw_db, now_utc, round2
 
@@ -62,9 +60,9 @@ async def _ensure_recurring_payment_identity(
     index_name: str,
 ) -> None:
     collection = raw_db[collection_name]
-    match = {"recurring_generated": True}
+    match: dict[str, object] = {"recurring_generated": True}
     match.update({field: {"$type": "string"} for field in fields})
-    identity = {"workspace_id": "$workspace_id"}
+    identity: dict[str, object] = {"workspace_id": "$workspace_id"}
     identity.update({field: f"${field}" for field in fields})
     duplicate_groups = await collection.aggregate([
         {"$match": match},
@@ -145,14 +143,33 @@ async def search_financial_records(query: str) -> list[dict]:
     regex = {"$regex": re.escape(query), "$options": "i"}
     results: list[dict] = []
     specs = [
-        ("INVESTMENTS", db.investments, {"$or": [{"name": regex}, {"symbol": regex}], "deleted_at": {"$exists": False}}, "name", "/savings"),
-        ("ACCOUNTS", db.accounts, {"$or": [{"name": regex}, {"bank": regex}], "deleted_at": {"$exists": False}}, "name", "/accounts"),
-        ("TRANSACTIONS", db.transactions, {"$or": [{"title": regex}, {"category": regex}, {"description": regex}], "deleted_at": {"$exists": False}}, "title", "/cash-flow"),
-        ("DOCUMENTS", db.documents, {"$or": [{"filename": regex}, {"category": regex}], "deleted_at": {"$exists": False}}, "filename", "/documents"),
-        ("PROJECTS", db.projects, {"name": regex, "deleted_at": {"$exists": False}}, "name", "/projects"),
-        ("PEOPLE", db.family_members, {"name": regex, "deleted_at": {"$exists": False}}, "name", "/family"),
+        ("INVESTMENTS", db.investments, {"$or": [{"name": regex}, {"symbol": regex}], "deleted_at": {"$exists": False}}, ("name", "symbol"), "/savings"),
+        ("ACCOUNTS", db.accounts, {"$or": [{"name": regex}, {"bank_name": regex}, {"bank": regex}], "deleted_at": {"$exists": False}}, ("name", "bank_name", "bank"), "/accounts"),
+        ("TRANSACTIONS", db.transactions, {"$or": [
+            {"title": regex}, {"category": regex}, {"description": regex},
+            {"source": regex}, {"party": regex}, {"note": regex},
+        ], "deleted_at": {"$exists": False}}, ("title", "description", "category", "source", "party", "note"), "/cash-flow"),
+        ("DOCUMENTS", db.documents, {"$or": [{"filename": regex}, {"category": regex}, {"notes": regex}], "deleted_at": {"$exists": False}}, ("filename", "category", "notes"), "/documents"),
+        ("PROJECTS", db.projects, {"$or": [{"name": regex}, {"location": regex}], "deleted_at": {"$exists": False}}, ("name", "location"), "/projects"),
+        ("CONTRACTORS & PARTIES", db.parties, {"$or": [{"name": regex}, {"party_type": regex}, {"scope": regex}], "deleted_at": {"$exists": False}}, ("name", "party_type", "scope"), "/projects"),
+        ("PEOPLE", db.family_members, {"name": regex, "deleted_at": {"$exists": False}}, ("name",), "/family"),
+        ("LOANS", db.loans, {"$or": [{"name": regex}, {"lender": regex}], "deleted_at": {"$exists": False}}, ("name", "lender"), "/loans"),
+        ("INSURANCE", db.insurance, {"$or": [{"policy_name": regex}, {"provider": regex}, {"insurer": regex}], "deleted_at": {"$exists": False}}, ("policy_name", "provider", "insurer"), "/insurance"),
+        ("LENDING", db.lendings, {"$or": [{"counterparty": regex}, {"name": regex}], "deleted_at": {"$exists": False}}, ("counterparty", "name"), "/lending"),
+        ("GOALS", db.goals, {"$or": [{"name": regex}, {"description": regex}], "deleted_at": {"$exists": False}}, ("name", "description"), "/goals"),
+        ("RECURRING BILLS", db.recurring_schedules, {"$or": [{"name": regex}, {"merchant": regex}, {"description": regex}], "deleted_at": {"$exists": False}}, ("name", "merchant", "description"), "/recurring"),
     ]
     for group, collection, filter_, label, path in specs:
         for row in await collection.find(filter_).limit(5).to_list(5):
-            results.append({"group": group, "id": str(row["_id"]), "label": row.get(label) or "Untitled", "detail": row.get("type") or row.get("category") or "", "path": path})
+            display = next((row.get(field) for field in label if row.get(field)), "Untitled")
+            detail = row.get("type") or row.get("category") or row.get("party_type") or row.get("date") or ""
+            if group == "TRANSACTIONS" and row.get("amount") is not None:
+                detail = f"{detail} · {row.get('date', '')} · ₹{row['amount']:,.2f}".strip(" ·")
+            results.append({
+                "group": group,
+                "id": str(row["_id"]),
+                "label": str(display),
+                "detail": str(detail),
+                "path": path,
+            })
     return results

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { ArrowDownRight, ArrowRight, ArrowUpRight, CircleDollarSign, Landmark, Sparkles, Wallet } from "lucide-react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, CheckCircle2, Circle, CircleDollarSign, Landmark, Sparkles, Wallet, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useFetch } from "../lib/useFetch";
 import { useAuth } from "../lib/auth";
@@ -16,7 +16,14 @@ export default function Overview() {
   const [drawer, setDrawer] = useState(null);
   const overview = useFetch("/dashboard/overview");
   const history = useFetch("/networth/history");
-  const { user } = useAuth();
+  const accounts = useFetch("/accounts");
+  const goals = useFetch("/goals");
+  const quality = useFetch("/data-quality");
+  const { user, setupDismissed, dismissSetup } = useAuth();
+  const hasAccount = (accounts.data || []).length > 0;
+  const hasGoal = (goals.data || []).length > 0;
+  const setupReady = !accounts.loading && !goals.loading && !accounts.error && !goals.error;
+  const showSetup = setupReady && !(hasAccount && hasGoal) && !setupDismissed;
   const data = overview.data;
   const historyData = useMemo(() => {
     const all = history.data?.items || [];
@@ -40,9 +47,38 @@ export default function Overview() {
         <Segmented options={ranges} value={range} onChange={setRange} />
       </section>
 
+      {showSetup && <section className="first-run-setup" aria-labelledby="first-run-setup-title">
+        <div className="first-run-setup__intro">
+          <div className="first-run-setup__icon" aria-hidden="true"><Sparkles size={17} /></div>
+          <div className="min-w-0">
+            <h2 id="first-run-setup-title">Set up your financial foundation</h2>
+            <p>Start with the basics. You can explore every other part of Nivara whenever you like.</p>
+          </div>
+          <button type="button" className="first-run-setup__dismiss" onClick={dismissSetup} aria-label="Skip setup and dismiss this guide" title="Skip setup"><X size={17} /></button>
+        </div>
+        <ol className="first-run-setup__steps">
+          <li className={hasAccount ? "is-complete" : ""}>
+            <span className="first-run-setup__step-icon" aria-hidden="true">{hasAccount ? <CheckCircle2 size={19} /> : <Circle size={19} />}</span>
+            <div className="first-run-setup__step-copy"><strong>{hasAccount ? "Account added" : "Add an account"}</strong><span>{hasAccount ? "Your balances can now inform your overview." : "Track a bank account, wallet or cash balance."}</span></div>
+            <button type="button" onClick={() => nav("/accounts")} aria-label={hasAccount ? "Review accounts" : "Add an account"}>{hasAccount ? "Review accounts" : "Add account"} <ArrowRight size={14} /></button>
+          </li>
+          <li className={hasGoal ? "is-complete" : ""}>
+            <span className="first-run-setup__step-icon" aria-hidden="true">{hasGoal ? <CheckCircle2 size={19} /> : <Circle size={19} />}</span>
+            <div className="first-run-setup__step-copy"><strong>{hasGoal ? "Goal created" : "Create a savings goal"}</strong><span>{hasGoal ? "Your plan is ready to track." : "Give an important plan a target amount and date."}</span></div>
+            <button type="button" onClick={() => nav("/goals")} aria-label={hasGoal ? "Review goals" : "Create a savings goal"}>{hasGoal ? "Review goals" : "Create goal"} <ArrowRight size={14} /></button>
+          </li>
+        </ol>
+        <p className="first-run-setup__footnote">This guide updates automatically as your account and goal are saved. Skip any time; navigation stays open.</p>
+      </section>}
+
+      {!quality.loading && !quality.error && quality.data?.total_issues > 0 && <button type="button" onClick={() => nav("/data-quality")} className="w-full rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-pop">
+        <span className="flex flex-wrap items-center justify-between gap-3"><span><span className="block text-sm font-bold text-ink">{quality.data.total_issues} financial data-quality checks need review</span><span className="mt-1 block text-xs text-subink">{quality.data.counts.reconciliation_variances || 0} statement differences · {quality.data.counts.uncategorized_transactions || 0} uncategorized · {quality.data.counts.stale_imported_balances || 0} stale imported balances</span></span><span className="inline-flex items-center gap-1 text-xs font-bold text-brand">Review checks <ArrowRight size={14} /></span></span>
+      </button>}
+
       <section className="grid xl:grid-cols-12 gap-4 sm:gap-5">
         <div className="nivara-hero wealth-command-panel rounded-2xl p-5 sm:p-6 xl:col-span-8 min-h-[390px] flex flex-col">
-          <div className="relative z-10 flex flex-wrap items-start justify-between gap-4"><div><div className="text-xs font-semibold wealth-muted">Total net worth</div><div className="num text-4xl sm:text-5xl font-bold text-white mt-1.5">{inr(data.net_worth, { compact: true })}</div><p className="text-xs wealth-muted mt-2">Based on your recorded assets and liabilities · <button onClick={() => nav("/net-worth")} className="wealth-link">View history</button></p></div><button onClick={() => nav("/net-worth")} className="wealth-action px-3.5 py-2 rounded-lg text-xs font-bold transition-colors">View statement <ArrowRight size={15} className="inline ml-1" /></button></div>
+          <div className="wealth-orbit" aria-hidden="true"><span className="wealth-orbit__sphere"><span>N</span></span><span className="wealth-orbit__ring wealth-orbit__ring--one" /><span className="wealth-orbit__ring wealth-orbit__ring--two" /><span className="wealth-orbit__ring wealth-orbit__ring--three" /><span className="wealth-orbit__satellite wealth-orbit__satellite--one" /><span className="wealth-orbit__satellite wealth-orbit__satellite--two" /></div>
+          <div className="relative z-10 flex flex-wrap items-start justify-between gap-4"><div><div className="text-xs font-semibold wealth-muted">Total net worth</div><div className="num text-4xl sm:text-5xl font-bold text-white mt-1.5">{inr(data.net_worth, { compact: true })}</div><p className="text-xs wealth-muted mt-2">Your recorded assets minus liabilities · <button onClick={() => nav("/net-worth")} className="wealth-link">Explore your balance sheet</button></p></div><button onClick={() => nav("/net-worth")} className="wealth-action px-3.5 py-2 rounded-lg text-xs font-bold transition-colors">View statement <ArrowRight size={15} className="inline ml-1" /></button></div>
           <div className="hero-chart-shell relative z-10 rounded-xl mt-5 flex-1 min-h-[190px] p-2.5">{history.loading && !history.data ? <div className="wealth-history-loading" role="status">Loading saved snapshots…</div> : history.error && !history.data ? <div className="wealth-history-error" role="status"><strong>Net-worth history is temporarily unavailable.</strong><span>Your current balances are still shown above.</span><button onClick={() => history.refetch()}>Retry history</button></div> : historyData.length === 1 ? <div className="wealth-history-single"><div className="wealth-history-single__label">Latest recorded snapshot</div><time className="wealth-history-single__date">{fmtDate(historyData[0].date)}</time><strong className="wealth-history-single__value num">{inr(historyData[0].net_worth, { compact: true })}</strong><span className="wealth-history-single__hint">A trend will appear after another dated snapshot is recorded.</span></div> : historyData.length > 1 ? <TrendLine data={historyData} xKey="date" yKey="net_worth" name="Net worth" monthLabels={false} color="#4B5BE5" /> : <div className="wealth-history-empty"><span className="wealth-history-empty__icon"><ArrowUpRight size={19} /></span><strong>No net-worth history in this range</strong><span>Your current balance is shown above. Choose another range or add a dated snapshot to begin tracking changes.</span><button onClick={() => nav("/net-worth")}>Open net-worth details <ArrowRight size={13} /></button></div>}</div>
           <div className="relative z-10 grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 mt-3"><MiniStat label="Assets" value={inr(data.total_assets, { compact: true })} onClick={() => setDrawer("assets")} /><MiniStat label="Liabilities" value={inr(data.total_liabilities, { compact: true })} onClick={() => setDrawer("liabilities")} /><MiniStat label="This month" value={`${data.month_savings >= 0 ? "+" : ""}${inr(data.month_savings, { compact: true })}`} positive /></div>
         </div>
