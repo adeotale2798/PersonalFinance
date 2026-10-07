@@ -26,11 +26,14 @@ export default function QuickAdd({ open, onClose, onDone, initialType = "EXPENSE
   useEffect(() => {
     if (!open) return;
     setForm({ date: todayISO() }); setError(""); setType(initialType); setProof(null);
-    Promise.all([
+    const loadOptions = () => Promise.all([
       api.get("/accounts").then((r) => setAccounts(r.data)).catch(() => {}),
       api.get("/settings").then((r) => setSettings(r.data)).catch(() => {}),
       api.get("/projects").then((r) => setProjects(r.data)).catch(() => {}),
     ]);
+    loadOptions();
+    window.addEventListener("nivara:data-changed", loadOptions);
+    return () => window.removeEventListener("nivara:data-changed", loadOptions);
   }, [open, initialType]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));

@@ -52,8 +52,9 @@ export default function Projects() {
             const pct = p.budget ? Math.min(100, Math.round((p.spent / p.budget) * 100)) : 0;
             return (
               <Card key={p.id} className="overflow-hidden hover:shadow-card transition-all cursor-pointer group" onClick={() => nav(`/projects/${p.id}`)} data-testid={`project-card-${p.id}`}>
-                <div className="h-36 bg-muted relative overflow-hidden">
+                <div className="relative h-24 overflow-hidden bg-gradient-to-br from-indigo-50 via-slate-50 to-cyan-50 sm:h-36">
                   {p.image_url && <img src={p.image_url} alt={p.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />}
+                  {!p.image_url && <FolderKanban aria-hidden="true" className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 text-brand/25" />}
                   <div className="absolute top-3 left-3"><Badge tone="brand">{p.type}</Badge></div>
                   <div className="absolute top-3 right-3"><StatusBadge status={p.status} /></div>
                 </div>

@@ -51,11 +51,11 @@ export default function Calendar() {
         actions={<Button onClick={() => navigate("/daily-spending")}><Plus size={15} /> Record today's spending</Button>} />
       <Card className="p-4 sm:p-5 mb-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center justify-between gap-1 sm:w-auto sm:justify-start sm:gap-2">
             <Button variant="secondary" size="sm" aria-label="Previous period" onClick={() => movePeriod(-1)}><ChevronLeft size={16} /></Button>
-            <h2 className="min-w-36 text-center font-display font-bold text-ink">{periodTitle}</h2>
+            <h2 className="min-w-0 flex-1 text-center font-display font-bold text-ink sm:min-w-36 sm:flex-none">{periodTitle}</h2>
             <Button variant="secondary" size="sm" aria-label="Next period" onClick={() => movePeriod(1)}><ChevronRight size={16} /></Button>
-            <Button variant="ghost" size="sm" onClick={() => setView("day", todayYear, todayMonth, today)}>Today</Button>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setView("day", todayYear, todayMonth, today)}>Today</Button>
           </div>
           <div className="flex gap-1 rounded-xl bg-muted p-1" aria-label="Calendar view">
             {["year", "month", "day"].map((item) => <button key={item} onClick={() => setView(item)} aria-pressed={view === item} className={`rounded-lg px-3 py-1.5 text-xs font-bold capitalize ${view === item ? "bg-white text-brand shadow-card" : "text-subink hover:text-ink"}`}>{item}</button>)}
