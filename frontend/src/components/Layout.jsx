@@ -15,36 +15,52 @@ import { useFetch } from "../lib/useFetch";
 
 const NAV = [
   {
-    group: "Personal Finance",
+    id: "home",
+    group: "Home",
     items: [
-      { name: "Action Center", path: "/", icon: LayoutDashboard, tid: "nav-overview" },
-      { name: "Review Inbox", path: "/review", icon: Inbox, tid: "nav-review" },
-      { name: "Financial Planner", path: "/planner", icon: CalendarDays, tid: "nav-planner" },
-      { name: "Calculators", path: "/calculators", icon: Calculator, tid: "nav-calculators" },
-      { name: "Cash Flow", path: "/cash-flow", icon: ArrowLeftRight, tid: "nav-cash-flow" },
-      { name: "Financial Calendar", path: "/calendar", icon: CalendarDays, tid: "nav-calendar" },
-      { name: "Daily Spending", path: "/daily-spending", icon: CreditCard, tid: "nav-daily-spending" },
-      { name: "Recurring Bills", path: "/recurring", icon: BellRing, tid: "nav-recurring" },
-      { name: "Debt Payoff Planner", path: "/debt-payoff", icon: TrendingDown, tid: "nav-debt-payoff" },
-      { name: "Data Quality", path: "/data-quality", icon: ShieldCheck, tid: "nav-data-quality" },
-      { name: "Accounts & Cash", path: "/accounts", icon: Wallet, tid: "nav-accounts" },
-      { name: "Income", path: "/income", icon: TrendingUp, tid: "nav-income" },
-      { name: "Expenses", path: "/expenses", icon: CreditCard, tid: "nav-expenses" },
-      { name: "Budgets & Plans", path: "/budgets", icon: Calculator, tid: "nav-budgets" },
-      { name: "Lending & Borrowing", path: "/lending", icon: Handshake, tid: "nav-lending" },
-      { name: "Savings & Investments", path: "/savings", icon: PiggyBank, tid: "nav-savings" },
-      { name: "PF & PPF", path: "/pf-ppf", icon: ShieldCheck, tid: "nav-pf-ppf" },
-      { name: "Loans", path: "/loans", icon: Landmark, tid: "nav-loans" },
-      { name: "Insurance", path: "/insurance", icon: Umbrella, tid: "nav-insurance" },
-      { name: "Rental Income", path: "/rental", icon: Building2, tid: "nav-rental" },
-      { name: "Net Worth", path: "/net-worth", icon: Scale, tid: "nav-net-worth" },
-      { name: "Losses", path: "/losses", icon: LockKeyhole, tid: "nav-losses" },
-      { name: "Daily Diary", path: "/diary", icon: BookOpen, tid: "nav-diary" },
-      { name: "Personal Necessities", path: "/necessities", icon: CarFront, tid: "nav-necessities" },
-      { name: "Goals", path: "/goals", icon: Target, tid: "nav-goals" },
+      { name: "Overview", path: "/", icon: LayoutDashboard, tid: "nav-overview" },
     ],
   },
   {
+    id: "daily",
+    group: "Daily",
+    items: [
+      { name: "Daily Spending", path: "/daily-spending", icon: CreditCard, tid: "nav-daily-spending" },
+      { name: "Accounts & Cash", path: "/accounts", icon: Wallet, tid: "nav-accounts" },
+      { name: "Income", path: "/income", icon: TrendingUp, tid: "nav-income" },
+      { name: "Expenses", path: "/expenses", icon: CreditCard, tid: "nav-expenses" },
+      { name: "Cash Flow", path: "/cash-flow", icon: ArrowLeftRight, tid: "nav-cash-flow" },
+    ],
+    advancedItems: [
+      { name: "Recurring Bills", path: "/recurring", icon: BellRing, tid: "nav-recurring" },
+      { name: "Financial Calendar", path: "/calendar", icon: CalendarDays, tid: "nav-calendar" },
+      { name: "Daily Diary", path: "/diary", icon: BookOpen, tid: "nav-diary" },
+      { name: "Personal Necessities", path: "/necessities", icon: CarFront, tid: "nav-necessities" },
+    ],
+  },
+  {
+    id: "plan",
+    group: "Plan",
+    items: [
+      { name: "Budgets & Plans", path: "/budgets", icon: Calculator, tid: "nav-budgets" },
+      { name: "Goals", path: "/goals", icon: Target, tid: "nav-goals" },
+      { name: "Debt Payoff", path: "/debt-payoff", icon: TrendingDown, tid: "nav-debt-payoff" },
+      { name: "Net Worth", path: "/net-worth", icon: Scale, tid: "nav-net-worth" },
+      { name: "Savings & Investments", path: "/savings", icon: PiggyBank, tid: "nav-savings" },
+    ],
+    advancedItems: [
+      { name: "Financial Planner", path: "/planner", icon: CalendarDays, tid: "nav-planner" },
+      { name: "Calculators", path: "/calculators", icon: Calculator, tid: "nav-calculators" },
+      { name: "Loans", path: "/loans", icon: Landmark, tid: "nav-loans" },
+      { name: "Lending & Borrowing", path: "/lending", icon: Handshake, tid: "nav-lending" },
+      { name: "PF & PPF", path: "/pf-ppf", icon: ShieldCheck, tid: "nav-pf-ppf" },
+      { name: "Insurance", path: "/insurance", icon: Umbrella, tid: "nav-insurance" },
+      { name: "Rental Income", path: "/rental", icon: Building2, tid: "nav-rental" },
+      { name: "Losses", path: "/losses", icon: LockKeyhole, tid: "nav-losses" },
+    ],
+  },
+  {
+    id: "projects",
     group: "Projects & Farms",
     items: [
       { name: "All Projects", path: "/projects", icon: FolderKanban, tid: "nav-projects" },
@@ -52,12 +68,21 @@ const NAV = [
     ],
   },
   {
-    group: "Governance & Admin",
+    id: "more",
+    group: "More",
     items: [
-      { name: "Family Members", path: "/family", icon: Users, tid: "nav-family" },
       { name: "Documents", path: "/documents", icon: FileText, tid: "nav-documents" },
-      { name: "Import Center", path: "/smart-import", icon: Upload, tid: "nav-imports" },
       { name: "Settings", path: "/settings", icon: Settings, tid: "nav-settings" },
+    ],
+    advancedItems: [
+      { name: "Review Inbox", path: "/review", icon: Inbox, tid: "nav-review" },
+      { name: "Data Quality", path: "/data-quality", icon: ShieldCheck, tid: "nav-data-quality" },
+      { name: "Family Members", path: "/family", icon: Users, tid: "nav-family" },
+      { name: "Import Center", path: "/smart-import", icon: Upload, tid: "nav-imports" },
+      { name: "Notification Center", path: "/notifications", icon: Bell, tid: "nav-notifications" },
+      { name: "Operational Logs", path: "/error-log", icon: ShieldCheck, tid: "nav-error-log" },
+      { name: "Access Control", path: "/access-control", icon: LockKeyhole, tid: "nav-access-control" },
+      { name: "Version History", path: "/versions", icon: Clock3, tid: "nav-versions" },
     ],
   },
 ];
@@ -71,6 +96,7 @@ const MOBILE = [
 ];
 
 const HOUSEHOLD_NAV = [{
+  id: "daily",
   group: "Shared household accounts",
   items: [
     { name: "Accounts & Cash", path: "/accounts", icon: Wallet, tid: "nav-accounts" },
@@ -99,31 +125,36 @@ function Brand({ version, onVersion }) {
   );
 }
 
-function NavItems({ onNavigate, collapsed = false }) {
+function NavItems({ onNavigate, collapsed = false, errorCount = 0 }) {
   const { pathname } = useLocation();
   const { user } = useAuth();
   const navGroups = user?.role === "HOUSEHOLD_USER" ? HOUSEHOLD_NAV : NAV;
-  const [openGroups, setOpenGroups] = useState(() => Object.fromEntries(navGroups.map((group) => [group.group, false])));
+  const [openGroups, setOpenGroups] = useState(() => Object.fromEntries(navGroups.map((group) => [group.group, ["Home", "Daily"].includes(group.group)])));
   useEffect(() => {
-    const activeGroup = navGroups.find((group) => group.items.some((item) => item.path === pathname || (item.path !== "/" && pathname.startsWith(`${item.path}/`))));
-    if (activeGroup) setOpenGroups((current) => current[activeGroup.group] ? current : { ...current, [activeGroup.group]: true });
+    const activeGroup = navGroups.find((group) => [...group.items, ...(group.advancedItems || [])]
+      .some((item) => item.path === pathname || (item.path !== "/" && pathname.startsWith(`${item.path}/`))));
+    if (activeGroup) {
+      setOpenGroups((current) => current[activeGroup.group] ? current : { ...current, [activeGroup.group]: true });
+    }
   }, [pathname, navGroups]);
+  const renderItem = (it) => (
+    <NavLink key={it.path} to={it.path} end={it.path === "/"} onClick={onNavigate} data-testid={it.tid}
+      className={({ isActive }) => cx(
+        "app-nav-link flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] font-bold transition-[background-color,color,transform,box-shadow]",
+        isActive ? "bg-gradient-to-r from-[#f3efff] to-[#f8fbff] text-brand-dark shadow-xs border-l-2 border-brand" : "text-subink hover:bg-muted hover:text-ink hover:translate-x-0.5"
+      )} title={collapsed ? it.name : undefined}>
+      <it.icon size={17} className="shrink-0" />
+      {!collapsed && <span className="truncate">{it.name}</span>}
+      {!collapsed && it.path === "/error-log" && errorCount > 0 && <span className="ml-auto min-w-4 rounded-full bg-expense px-1 text-center text-[9px] text-white">{errorCount > 99 ? "99+" : errorCount}</span>}
+    </NavLink>
+  );
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
       {navGroups.map((g) => (
         <div key={g.group}>
-          {!collapsed && <button onClick={() => setOpenGroups((current) => ({ ...current, [g.group]: !current[g.group] }))} className="w-full overline text-faint px-3 mb-1.5 flex items-center justify-between hover:text-ink" aria-expanded={!!openGroups[g.group]}><span>{g.group}</span><ChevronDown size={13} className={cx("transition-transform", !openGroups[g.group] && "-rotate-90")}/></button>}
+          {!collapsed && <button data-testid={`nav-group-${g.id}`} onClick={() => setOpenGroups((current) => ({ ...current, [g.group]: !current[g.group] }))} className="w-full overline text-faint px-3 mb-1.5 flex items-center justify-between hover:text-ink" aria-expanded={!!openGroups[g.group]}><span>{g.group}</span><ChevronDown size={13} className={cx("transition-transform", !openGroups[g.group] && "-rotate-90")}/></button>}
           <div className={cx("space-y-0.5", !collapsed && !openGroups[g.group] && "hidden")}>
-            {g.items.map((it) => (
-              <NavLink key={it.path} to={it.path} end={it.path === "/"} onClick={onNavigate} data-testid={it.tid}
-                className={({ isActive }) => cx(
-                  "app-nav-link flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] font-bold transition-[background-color,color,transform,box-shadow]",
-                  isActive ? "bg-gradient-to-r from-[#f3efff] to-[#f8fbff] text-brand-dark shadow-xs border-l-2 border-brand" : "text-subink hover:bg-muted hover:text-ink hover:translate-x-0.5"
-                )} title={collapsed ? it.name : undefined}>
-                <it.icon size={17} className="shrink-0" />
-                {!collapsed && <span className="truncate">{it.name}</span>}
-              </NavLink>
-            ))}
+            {[...g.items, ...(g.advancedItems || [])].map(renderItem)}
           </div>
         </div>
       ))}
@@ -251,7 +282,11 @@ function Notifications() {
   useEffect(() => {
     load();
     window.addEventListener("nivara:notifications-changed", load);
-    return () => window.removeEventListener("nivara:notifications-changed", load);
+    window.addEventListener("nivara:data-changed", load);
+    return () => {
+      window.removeEventListener("nivara:notifications-changed", load);
+      window.removeEventListener("nivara:data-changed", load);
+    };
   }, []);
   useEffect(() => {
     if (!open) return undefined;
@@ -262,7 +297,7 @@ function Notifications() {
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [open]);
   const acknowledge = async (item) => {
-    try { setItems((current) => current.filter((entry) => entry.id !== item.id)); await api.post(`/notifications/${item.id}/acknowledge`); load(); window.dispatchEvent(new Event("nivara:notifications-changed")); }
+    try { await api.post(`/notifications/${item.id}/acknowledge`); }
     catch (e) { setError(apiError(e)); }
   };
   return <div className="relative" ref={panelRef}><button onClick={() => setOpen((value) => !value)} className="relative w-9 h-9 rounded-lg text-subink hover:bg-muted flex items-center justify-center" aria-label="Notifications" aria-expanded={open} title="Notifications"><Bell size={18} />{items.length > 0 && <span className="absolute -right-1 -top-1 min-w-4 h-4 px-1 rounded-full bg-expense text-white text-[10px] font-bold flex items-center justify-center">{items.length > 99 ? "99+" : items.length}</span>}</button>
@@ -282,7 +317,11 @@ function OverdueAlertPopups() {
   useEffect(() => {
     load();
     window.addEventListener("nivara:notifications-changed", load);
-    return () => window.removeEventListener("nivara:notifications-changed", load);
+    window.addEventListener("nivara:data-changed", load);
+    return () => {
+      window.removeEventListener("nivara:notifications-changed", load);
+      window.removeEventListener("nivara:data-changed", load);
+    };
   }, []);
   const dismiss = (id) => { dismissed.current.add(id); setItems((current) => current.filter((item) => item.id !== id)); };
   if (!items.length) return null;
@@ -310,7 +349,6 @@ export default function Layout({ children }) {
   const [drawer, setDrawer] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [quickAdd, setQuickAdd] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
   const [errorCount, setErrorCount] = useState(0);
   const [version, setVersion] = useState("—");
   const nav = useNavigate();
@@ -318,13 +356,25 @@ export default function Layout({ children }) {
   const initials = (user?.name || user?.email || "A").slice(0, 1).toUpperCase();
   const pageTitle = loc.pathname === "/"
     ? "Overview"
-    : (householdUser ? HOUSEHOLD_NAV : NAV).flatMap((group) => group.items).find((item) => item.path === loc.pathname)?.name
+    : (householdUser ? HOUSEHOLD_NAV : NAV).flatMap((group) => [...group.items, ...(group.advancedItems || [])]).find((item) => item.path === loc.pathname)?.name
       || (loc.pathname.startsWith("/projects/") ? "Project workspace" : "Nivara Finance");
   const mobileMoreActive = !mobileItems.some((item) => item.path && (
     item.path === loc.pathname || (item.path !== "/" && loc.pathname.startsWith(`${item.path}/`))
   ));
-  useEffect(() => { if (!householdUser) api.get("/error-logs/unread-count").then((r) => setErrorCount(r.data.count || 0)).catch(() => {}); }, [loc.pathname, householdUser]);
-  useEffect(() => { if (!householdUser) api.get("/version-history").then((r) => setVersion(r.data.current || "—")).catch(() => {}); }, [householdUser]);
+  useEffect(() => {
+    if (householdUser) return undefined;
+    const load = () => api.get("/error-logs/unread-count").then((r) => setErrorCount(r.data.count || 0)).catch(() => {});
+    load();
+    window.addEventListener("nivara:data-changed", load);
+    return () => window.removeEventListener("nivara:data-changed", load);
+  }, [loc.pathname, householdUser]);
+  useEffect(() => {
+    if (householdUser) return undefined;
+    const load = () => api.get("/version-history").then((r) => setVersion(r.data.current || "—")).catch(() => {});
+    load();
+    window.addEventListener("nivara:data-changed", load);
+    return () => window.removeEventListener("nivara:data-changed", load);
+  }, [householdUser]);
 
   return (
     <div className="app-shell min-h-screen bg-bg flex">
@@ -335,7 +385,7 @@ export default function Layout({ children }) {
           {sidebarCollapsed && <img src="/brand/nivara-logo-mark.png" alt="Nivara Finance" className="brand-mark h-11 w-11 rounded-xl border border-white/60 bg-white object-contain shadow-card" />}
           <button onClick={() => setSidebarCollapsed((value) => !value)} className={cx("sidebar-collapse w-8 h-8 rounded-lg text-subink hover:bg-muted flex items-center justify-center", sidebarCollapsed && "absolute -right-4 bg-white border border-line shadow-sm")} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}><ChevronRight size={16} className={cx("transition-transform", !sidebarCollapsed && "rotate-180")}/></button>
         </div>
-        <NavItems collapsed={sidebarCollapsed} />
+        <NavItems collapsed={sidebarCollapsed} errorCount={errorCount} />
         <div className="sidebar-footer">
           {!sidebarCollapsed && <div className="sidebar-profile">
             <div className="sidebar-profile__avatar">{initials}</div>
@@ -354,7 +404,7 @@ export default function Layout({ children }) {
             <div className="h-16 px-5 flex items-center justify-between border-b border-line">
               <Brand version={version} onVersion={() => { setDrawer(false); nav("/versions"); }} /><button onClick={() => setDrawer(false)} aria-label="Close navigation" className="p-1.5 text-subink"><X size={20} /></button>
             </div>
-            <NavItems onNavigate={() => setDrawer(false)} />
+            <NavItems onNavigate={() => setDrawer(false)} errorCount={errorCount} />
             <div className="p-3 border-t border-line">
               <button onClick={logout} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-subink hover:bg-muted"><LogOut size={17} /> Sign out</button>
             </div>
@@ -379,8 +429,6 @@ export default function Layout({ children }) {
               <Plus size={14} /><span className="hidden sm:inline">Record</span>
             </button>}
             <div className="relative flex items-center gap-2 pl-1">
-              {!householdUser && <button onClick={() => setAdminOpen((v) => !v)} className="hidden sm:inline-flex items-center gap-1 h-8 px-2 rounded-full border border-line bg-white text-[10px] font-bold text-ink hover:bg-muted">Admin <ChevronDown size={13}/>{errorCount > 0 && <span className="min-w-4 h-4 px-1 rounded-full bg-expense text-white text-[10px] flex items-center justify-center">{errorCount > 99 ? "99+" : errorCount}</span>}</button>}
-              {adminOpen && <div className="absolute right-0 top-11 w-56 p-2 rounded-xl border border-line bg-white shadow-pop z-40"><button onClick={() => { setAdminOpen(false); nav("/notifications"); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-muted">Notification center</button><button onClick={() => { setAdminOpen(false); nav("/versions"); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-muted">Version control</button><button onClick={() => { setAdminOpen(false); nav("/error-log"); }} className="w-full flex justify-between text-left px-3 py-2 rounded-lg text-sm hover:bg-muted">Operational logs {errorCount > 0 && <span className="text-expense font-bold">{errorCount}</span>}</button><button onClick={() => { setAdminOpen(false); nav("/access-control"); }} className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-muted">Access control</button></div>}
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-800 to-slate-500 ring-2 ring-white shadow-xs text-white flex items-center justify-center text-xs font-bold" data-testid="user-avatar">{initials}</div>
               <div className="hidden md:block leading-tight">
                 <div className="max-w-32 truncate text-sm font-semibold text-ink">{user?.name || "Admin"}</div>

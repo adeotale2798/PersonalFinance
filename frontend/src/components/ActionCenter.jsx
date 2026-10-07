@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ArrowRight, CalendarClock, CheckCircle2, Check, Clock3, CreditCard, CircleAlert, MoreHorizontal } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ArrowRight, CalendarClock, CheckCircle2, Check, Clock3, CreditCard, CircleAlert, MoreHorizontal, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Card, StateBlock, Button, Modal, Field, Input } from "./ui";
 import api, { apiError } from "../lib/api";
@@ -18,6 +18,20 @@ export default function ActionCenter({ compact = false }) {
     .slice(0, compact ? 4 : 8);
   const [selected, setSelected] = useState(null); const [paying, setPaying] = useState(false); const [amount, setAmount] = useState(""); const [until, setUntil] = useState(""); const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
+  const [justUpdated, setJustUpdated] = useState(false);
+  const updateTimer = useRef(null);
+  useEffect(() => {
+    const markUpdated = () => {
+      setJustUpdated(true);
+      window.clearTimeout(updateTimer.current);
+      updateTimer.current = window.setTimeout(() => setJustUpdated(false), 2200);
+    };
+    window.addEventListener("nivara:data-changed", markUpdated);
+    return () => {
+      window.removeEventListener("nivara:data-changed", markUpdated);
+      window.clearTimeout(updateTimer.current);
+    };
+  }, []);
   const mutate = async (action, extra = {}) => {
     if (!selected) return;
     setErr(""); setNotice(""); setPaying(true);
@@ -25,8 +39,6 @@ export default function ActionCenter({ compact = false }) {
       await api.post(`/planning/actions/${encodeURIComponent(selected.id)}`, { action, source_collection: selected.source_collection, source_id: selected.source_id, ...extra });
       setNotice(action === "postpone" ? `${selected.label || selected.title} postponed until ${fmtDate(extra.snoozed_until)}.` : action === "record_payment" ? "Payment recorded and the priority resolved." : action === "review" ? "Marked reviewed." : "Priority resolved.");
       setSelected(null);
-      overview.refetch(true);
-      refetch(true);
     } catch (e) {
       setErr(apiError(e));
     } finally {
@@ -67,10 +79,16 @@ export default function ActionCenter({ compact = false }) {
       nav(item.path);
     }
   };
-  return <><Card className="overflow-hidden" data-testid="action-center">
-    <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-line">
+  return <><Card className="relative overflow-hidden border-white/80 shadow-[0_20px_55px_-38px_rgba(42,64,102,.45)]" data-testid="action-center">
+    <div className="flex items-center justify-between gap-3 border-b border-line bg-gradient-to-r from-white via-white to-indigo-50/70 px-5 py-4">
       <div className="flex items-center gap-2"><span className="w-8 h-8 rounded-xl bg-amber-light text-amber grid place-items-center"><CalendarClock size={16}/></span><div><h2 className="font-display font-semibold text-ink">{compact ? "What needs your attention?" : "Action Center"}</h2><p className="text-xs text-subink">Priorities are based on recorded transactions and dated commitments.</p></div></div>
-      <button onClick={() => nav("/planner")} className="text-xs font-semibold text-brand inline-flex items-center gap-1">Planner <ArrowRight size={14}/></button>
+      <div className="flex shrink-0 items-center gap-2">
+        <span role="status" aria-live="polite" data-testid="action-center-sync" className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[10px] font-bold transition-colors sm:inline-flex ${justUpdated ? "border-teal-200 bg-teal-50 text-teal-800" : "border-slate-200 bg-white/80 text-faint"}`}>
+          {justUpdated ? <Sparkles size={12} className="animate-pulse" /> : <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />}
+          {justUpdated ? "Just updated" : "Auto-sync on"}
+        </span>
+        <button onClick={() => nav("/planner")} className="text-xs font-semibold text-brand inline-flex items-center gap-1">Planner <ArrowRight size={14}/></button>
+      </div>
     </div>
     {priorities.length > 0 && <section aria-label="Financial priorities" className="border-b border-line bg-amber-50/50">
       <div className="flex items-center gap-2 px-5 pt-4 pb-1 text-xs font-extrabold text-ink"><CircleAlert size={15} className="text-amber" /> Focus next</div>

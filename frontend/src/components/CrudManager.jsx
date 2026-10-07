@@ -7,7 +7,10 @@ import { inr, fmtDate, indianNumber, moneyValue, dateInputValue, dateToISO } fro
 
 function FieldInput({ f, value, onChange, form }) {
   const common = { value: value ?? "", onChange: (e) => onChange(f.key, e.target.value), "data-testid": `field-${f.key}` };
-  if (f.type === "select")
+  if (f.type === "select") {
+    const options = (f.options || []).filter((option, index, all) =>
+      all.findIndex((candidate) => String(candidate.value ?? candidate) === String(option.value ?? option)) === index
+    );
     return <Select {...common} onChange={async (e) => {
       const nextValue = e.target.value;
       if (nextValue === "__add_option__") {
@@ -17,7 +20,8 @@ function FieldInput({ f, value, onChange, form }) {
       }
       onChange(f.key, nextValue);
       f.onValueChange?.(nextValue, form, onChange);
-    }}><option value="">Select…</option>{(f.options || []).map((o) => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}{f.onAddOption && <option value="__add_option__">+ Add party…</option>}</Select>;
+    }}><option value="">Select…</option>{options.map((o) => <option key={String(o.value ?? o)} value={o.value ?? o}>{o.label ?? o}</option>)}{f.onAddOption && <option value="__add_option__">+ Add party…</option>}</Select>;
+  }
   if (f.type === "textarea") return <Textarea {...common} placeholder={f.placeholder} />;
   if (f.type === "money") return <Input inputMode="decimal" {...common} value={indianNumber(value)} onChange={(e) => onChange(f.key, moneyValue(e.target.value))} placeholder={f.placeholder || "0"} />;
   if (f.type === "number") return <Input type="number" step="any" {...common} placeholder={f.placeholder || "0"} />;

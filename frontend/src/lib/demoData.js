@@ -174,6 +174,25 @@ const data = {
   ],
 };
 
+const initialDemoFinancials = {
+  bank: accounts.filter((item) => item.type !== "CASH").reduce((sum, item) => sum + Number(item.current_balance || 0), 0),
+  cash: accounts.filter((item) => item.type === "CASH").reduce((sum, item) => sum + Number(item.current_balance || 0), 0),
+  savings: savings.reduce((sum, item) => sum + Number(item.current_value || 0), 0),
+  pfPpf: pfPpf.reduce((sum, item) => sum + Number(item.current_balance || 0), 0),
+  investments: investments.reduce((sum, item) => sum + Number(item.current_value || 0), 0),
+  assets: assets.reduce((sum, item) => sum + Number(item.current_value || 0), 0),
+  liabilities: liabilities.reduce((sum, item) => sum + Number(item.outstanding || 0), 0),
+  loans: loans.reduce((sum, item) => sum + Number(item.outstanding || 0), 0),
+  lending: lending.reduce((sum, item) => {
+    const outstanding = Number(item.amount || 0) - (item.repayments || []).reduce((paid, payment) => paid + Number(payment.amount || 0), 0);
+    return sum + (item.direction === "LENT" ? Math.max(outstanding, 0) : 0);
+  }, 0),
+  borrowings: lending.reduce((sum, item) => {
+    const outstanding = Number(item.amount || 0) - (item.repayments || []).reduce((paid, payment) => paid + Number(payment.amount || 0), 0);
+    return sum + (item.direction === "BORROWED" ? Math.max(outstanding, 0) : 0);
+  }, 0),
+};
+
 const allMonths = Array.from({ length: 12 }, (_, index) => monthKey(11 - index));
 const trend = (key, base, growth) => allMonths.map((month, index) => ({ [key]: month, value: Math.round(base + index * growth) }));
 const cashFlowSeries = allMonths.map((month, index) => ({ period: month, in: 245000 + index * 3200, out: 168000 + index * 2100, net: 77000 + index * 1100 }));
@@ -428,6 +447,452 @@ function budgetOverview(month) {
   };
 }
 
+function demoPlanningEvents() {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizonDate = new Date(`${today}T00:00:00Z`);
+  horizonDate.setUTCDate(horizonDate.getUTCDate() + 30);
+  const horizon = horizonDate.toISOString().slice(0, 10);
+  const events = [];
+  const add = (title, dueDate, amount, kind, path, detail, sourceCollection, sourceId) => {
+    if (!dueDate || dueDate > horizon) return;
+    const id = `${kind}:${sourceCollection}:${sourceId}:${dueDate}:${title}`;
+    events.push({ id, title, due_date: dueDate, amount: Number(amount) || 0, kind, path, detail, source_collection: sourceCollection, source_id: sourceId });
+  };
+
+  data.lending.forEach((item) => {
+    const outstanding = Math.max(Number(item.amount || 0) - (item.repayments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0), 0);
+    if (!outstanding) return;
+    const borrowed = item.direction === "BORROWED";
+    add(borrowed ? "Repay borrowing" : "Recover lending", item.due_date, outstanding, borrowed ? "BORROWING" : "LENDING", "/lending", item.counterparty || "Counterparty", "lendings", item.id);
+  });
+  data.loans.filter((item) => item.status !== "Closed").forEach((item) => {
+    add("Loan EMI", item.next_due_date || item.due_date, item.emi, "LOAN", "/loans", item.name || item.lender || "Loan", "loans", item.id);
+  });
+  data.insurance.filter((item) => item.status !== "Lapsed").forEach((item) => {
+    add("Renew insurance", item.renewal_date, item.premium, "INSURANCE", "/insurance", item.policy_name || "Policy", "insurance", item.id);
+  });
+  [
+    [data.rentalPayments, "Collect rent", "/rental", "property_name", "rent_payments"],
+    [data.farmRentPayments, "Collect farm lease", "/farms", "farm_name", "farm_rent_payments"],
+  ].forEach(([payments, title, path, label, collection]) => {
+    payments.filter((item) => ["PENDING", "PARTIAL"].includes(item.status)).forEach((item) => {
+      const outstanding = Math.max(Number(item.amount_due || 0) - Number(item.amount_received || 0), 0);
+      if (outstanding) add(title, item.due_date, outstanding, "RECEIVABLE", path, item[label] || item.tenant || "Collection", collection, item.id);
+    });
+  });
+  data.goals.filter((item) => item.status !== "COMPLETED").forEach((item) => {
+    const remaining = Math.max(Number(item.target_amount || 0) - Number(item.current_amount || 0), 0);
+    if (remaining) add("Fund goal", item.target_date, remaining, "GOAL", "/goals", item.name || "Goal", "goals", item.id);
+  });
+  data.pfPpf.forEach((item) => {
+    const dueDate = item.next_contribution_date || item.contribution_due_date;
+    if (dueDate) {
+      const kind = (item.kind || "fund").toUpperCase();
+      add(`Contribute to ${kind}`, dueDate, item.expected_contribution, ["PPF", "SIP"].includes(kind) ? kind : "CONTRIBUTION", "/pf-ppf", item.institution || "Fund", "pf_ppf", item.id);
+    }
+  });
+  data.notifications.filter((item) => item.kind === "CUSTOM_REMINDER" && item.status === "OPEN").forEach((item) => {
+    add(item.title || "Reminder", item.due_date, item.amount, item.commitment_kind || "REMINDER", "/notifications", item.message || "", "notifications", item.id);
+  });
+  return events.sort((left, right) => left.due_date.localeCompare(right.due_date));
+}
+
+function isDemoActionVisible(item, today) {
+  const state = demoPlanningActionStates.get(item.id);
+  return state?.status !== "RESOLVED" && !(state?.status === "SNOOZED" && state.snoozed_until >= today);
+}
+
+function currentNetWorth() {
+  const result = clone(netWorth);
+  const total = (items, field) => items.reduce((sum, item) => sum + Number(item[field] || 0), 0);
+  const bank = total(data.accounts.filter((item) => item.type !== "CASH"), "current_balance");
+  const cash = total(data.accounts.filter((item) => item.type === "CASH"), "current_balance");
+  const savingsValue = total(data.savings, "current_value");
+  const pfPpfValue = total(data.pfPpf, "current_balance");
+  const investmentValue = total(data.investments, "current_value");
+  const assetValue = total(data.assets, "current_value");
+  const lendingValue = data.lending.reduce((sum, item) => {
+    const outstanding = Number(item.amount || 0) - (item.repayments || []).reduce((paid, payment) => paid + Number(payment.amount || 0), 0);
+    return sum + (item.direction === "LENT" ? Math.max(outstanding, 0) : 0);
+  }, 0);
+  const borrowingValue = data.lending.reduce((sum, item) => {
+    const outstanding = Number(item.amount || 0) - (item.repayments || []).reduce((paid, payment) => paid + Number(payment.amount || 0), 0);
+    return sum + (item.direction === "BORROWED" ? Math.max(outstanding, 0) : 0);
+  }, 0);
+  const bankDelta = bank - initialDemoFinancials.bank;
+  const cashDelta = cash - initialDemoFinancials.cash;
+  const savingsDelta = savingsValue - initialDemoFinancials.savings;
+  const pfPpfDelta = pfPpfValue - initialDemoFinancials.pfPpf;
+  const investmentDelta = investmentValue - initialDemoFinancials.investments;
+  const assetDelta = assetValue - initialDemoFinancials.assets;
+  const lendingDelta = lendingValue - initialDemoFinancials.lending;
+  const borrowingDelta = borrowingValue - initialDemoFinancials.borrowings;
+  const loanDelta = total(data.loans, "outstanding") - initialDemoFinancials.loans;
+  const otherLiabilityDelta = total(data.liabilities, "outstanding") - initialDemoFinancials.liabilities;
+  const liabilityDelta = loanDelta + otherLiabilityDelta + borrowingDelta;
+  const totalAssetDelta = bankDelta + cashDelta + savingsDelta + pfPpfDelta + investmentDelta + assetDelta + lendingDelta;
+
+  result.total_assets += totalAssetDelta;
+  result.total_liabilities += liabilityDelta;
+  result.net_worth += totalAssetDelta - liabilityDelta;
+  result.breakdown.bank += bankDelta;
+  result.breakdown.cash += cashDelta;
+  result.breakdown.savings += savingsDelta;
+  result.breakdown.pf_ppf += pfPpfDelta;
+  result.breakdown.investments += investmentDelta;
+  result.breakdown.property += assetDelta;
+  result.breakdown.receivables += lendingDelta;
+  result.liability_breakdown.loans += loanDelta + otherLiabilityDelta;
+  result.liability_breakdown.borrowings += borrowingDelta;
+  result.allocation = result.allocation.map((item) => ({
+    ...item,
+    value: item.name === "Bank" ? item.value + bankDelta
+      : item.name === "Cash" ? item.value + cashDelta
+        : item.name === "Savings" ? item.value + savingsDelta
+          : item.name === "PF/PPF" ? item.value + pfPpfDelta
+            : item.name === "Investments" ? item.value + investmentDelta
+              : item.name === "Property" ? item.value + assetDelta
+                : item.name === "Receivables" ? item.value + lendingDelta
+                  : item.value,
+  }));
+  return result;
+}
+
+function transactionSummary(type, groupField) {
+  const rows = data.transactions.filter((item) =>
+    item.type === type && !["PENDING", "VOID"].includes(item.transaction_status)
+  );
+  const grouped = new Map();
+  const monthly = new Map();
+  const year = new Date().getFullYear().toString();
+  const month = monthKey();
+  let yearTotal = 0;
+  rows.forEach((item) => {
+    const amount = Number(item.amount || 0);
+    const group = item[groupField] || "Uncategorized";
+    const key = item.date?.slice(0, 7);
+    grouped.set(group, (grouped.get(group) || 0) + amount);
+    if (key) monthly.set(key, (monthly.get(key) || 0) + amount);
+    if (item.date?.slice(0, 4) === year) yearTotal += amount;
+  });
+  return {
+    total: rows.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    this_month: monthly.get(month) || 0,
+    this_year: yearTotal,
+    by_group: [...grouped].map(([name, value]) => ({ name, value })).sort((left, right) => right.value - left.value),
+    by_month: [...monthly].sort(([left], [right]) => left.localeCompare(right)).map(([monthKey, value]) => ({ month: monthKey, value })),
+  };
+}
+
+function savingsSummary() {
+  const byType = new Map();
+  const contributions = new Map();
+  data.savings.forEach((item) => {
+    const type = item.type || "Other";
+    byType.set(type, (byType.get(type) || 0) + Number(item.current_value || 0));
+    (item.contributions || []).forEach((contribution) => {
+      const month = contribution.date?.slice(0, 7);
+      if (month) contributions.set(month, (contributions.get(month) || 0) + Number(contribution.amount || 0));
+    });
+  });
+  return {
+    total: data.savings.reduce((sum, item) => sum + Number(item.current_value || 0), 0),
+    count: data.savings.length,
+    by_type: [...byType].map(([name, value]) => ({ name, value })),
+    contribution_trend: [...contributions].sort(([left], [right]) => left.localeCompare(right)).map(([month, value]) => ({ month, value })),
+  };
+}
+
+function pfPpfSummary() {
+  const contributions = new Map();
+  data.pfPpf.forEach((item) => (item.contributions || []).forEach((contribution) => {
+    const month = contribution.date?.slice(0, 7);
+    if (month) contributions.set(month, (contributions.get(month) || 0) + Number(contribution.amount || 0));
+  }));
+  const sum = (rows) => rows.reduce((total, item) => total + Number(item.current_balance || 0), 0);
+  return {
+    total: sum(data.pfPpf),
+    pf: sum(data.pfPpf.filter((item) => item.kind === "PF")),
+    ppf: sum(data.pfPpf.filter((item) => item.kind === "PPF")),
+    count: data.pfPpf.length,
+    contribution_trend: [...contributions].sort(([left], [right]) => left.localeCompare(right)).map(([month, value]) => ({ month, value })),
+  };
+}
+
+function loanSummary() {
+  const total = (field) => data.loans.reduce((sum, item) => sum + Number(item[field] || 0), 0);
+  return {
+    total_outstanding: total("outstanding"),
+    total_sanctioned: total("sanctioned"),
+    total_paid: data.loans.reduce((sum, item) => sum + Math.max(Number(item.disbursed || item.sanctioned || 0) - Number(item.outstanding || 0), 0), 0),
+    monthly_emi: data.loans.reduce((sum, item) => sum + (item.status === "Closed" ? 0 : Number(item.emi || 0)), 0),
+    count: data.loans.length,
+  };
+}
+
+function insuranceSummary() {
+  const annualMultiplier = { yearly: 1, "half-yearly": 2, quarterly: 4, monthly: 12 };
+  const annualize = (item) => Number(item.premium || 0) * (annualMultiplier[String(item.frequency || "Yearly").toLowerCase()] || 1);
+  const byType = new Map();
+  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  const upcoming = [];
+  data.insurance.forEach((item) => {
+    const type = item.type || "Other";
+    byType.set(type, (byType.get(type) || 0) + annualize(item));
+    if (item.renewal_date) {
+      const days = Math.floor((Date.parse(`${item.renewal_date.slice(0, 10)}T00:00:00Z`) - today.getTime()) / 86400000);
+      if (Number.isFinite(days) && days <= 90) {
+        upcoming.push({ id: item.id, policy_name: item.policy_name, type: item.type, renewal_date: item.renewal_date, days, premium: Number(item.premium || 0) });
+      }
+    }
+  });
+  return {
+    total_annual_premium: data.insurance.reduce((sum, item) => sum + annualize(item), 0),
+    total_cover: data.insurance.reduce((sum, item) => sum + Number(item.sum_insured || 0), 0),
+    count: data.insurance.length,
+    upcoming_renewals: upcoming.sort((left, right) => left.days - right.days),
+    by_type: [...byType].map(([name, value]) => ({ name, value })),
+  };
+}
+
+function rentalSummary() {
+  const month = monthKey();
+  const payments = data.rentalPayments;
+  const currentMonth = payments.filter((item) => item.period === month);
+  const collected = currentMonth.reduce((sum, item) => sum + Number(item.amount_received || 0), 0);
+  const expected = currentMonth.reduce((sum, item) => sum + Number(item.amount_due || 0), 0);
+  const trend = new Map();
+  const byProperty = new Map();
+  payments.forEach((item) => {
+    const amount = Number(item.amount_received || 0);
+    if (item.period) trend.set(item.period, (trend.get(item.period) || 0) + amount);
+    if (amount > 0) {
+      const property = item.property_name || "Unknown";
+      byProperty.set(property, (byProperty.get(property) || 0) + amount);
+    }
+  });
+  const outstanding = payments.reduce((sum, item) => sum + Math.max(Number(item.amount_due || 0) - Number(item.amount_received || 0), 0), 0);
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    monthly_rent: data.rentalProperties.reduce((sum, property) => sum + (property.units || []).filter((unit) => (unit.status || "OCCUPIED") === "OCCUPIED").reduce((units, unit) => units + Number(unit.monthly_rent || 0), 0), 0),
+    collected,
+    expected,
+    outstanding,
+    overdue: payments.filter((item) => item.due_date && item.due_date < today && item.status !== "COLLECTED")
+      .reduce((sum, item) => sum + Math.max(Number(item.amount_due || 0) - Number(item.amount_received || 0), 0), 0),
+    collection_rate: expected > 0 ? Math.round((collected / expected) * 10000) / 100 : 0,
+    properties: data.rentalProperties.length,
+    income_trend: [...trend].sort(([left], [right]) => left.localeCompare(right)).map(([month, value]) => ({ month, value })),
+    by_property: [...byProperty].map(([name, value]) => ({ name, value })),
+  };
+}
+
+function farmsSummary() {
+  const transactions = data.transactions.filter((item) => item.scope === "FARM" && !["PENDING", "VOID"].includes(item.transaction_status));
+  const perFarm = data.farms.map((farm) => {
+    const rows = transactions.filter((item) => item.farm_id === farm.id);
+    const income = rows.filter((item) => item.type === "INCOME").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const expense = rows.filter((item) => item.type === "EXPENSE").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    return { ...farm, income, expense, net: income - expense };
+  });
+  const monthly = new Map();
+  transactions.forEach((item) => {
+    const month = item.date?.slice(0, 7);
+    if (!month) return;
+    const row = monthly.get(month) || { month, in: 0, out: 0 };
+    if (item.type === "INCOME") row.in += Number(item.amount || 0);
+    if (item.type === "EXPENSE") row.out += Number(item.amount || 0);
+    monthly.set(month, row);
+  });
+  const year = String(new Date().getFullYear());
+  const annualPayments = data.farmRentPayments.filter((item) => item.period === year);
+  const totalIncome = perFarm.reduce((sum, farm) => sum + farm.income, 0);
+  const totalExpense = perFarm.reduce((sum, farm) => sum + farm.expense, 0);
+  return {
+    total_income: totalIncome,
+    total_expense: totalExpense,
+    net: totalIncome - totalExpense,
+    count: data.farms.length,
+    per_farm: perFarm,
+    monthly: [...monthly].sort(([left], [right]) => left.localeCompare(right)).map(([, value]) => value),
+    annual_rent_due: annualPayments.reduce((sum, item) => sum + Number(item.amount_due || 0), 0),
+    annual_rent_received: annualPayments.reduce((sum, item) => sum + Number(item.amount_received || 0), 0),
+  };
+}
+
+function dashboardOverview() {
+  const result = clone(staticResponses["/dashboard/overview"]);
+  const wealth = currentNetWorth();
+  Object.assign(result, {
+    net_worth: wealth.net_worth,
+    total_assets: wealth.total_assets,
+    total_liabilities: wealth.total_liabilities,
+    cash: wealth.breakdown.cash,
+    bank: wealth.breakdown.bank,
+    savings: wealth.breakdown.savings,
+    pf_ppf: wealth.breakdown.pf_ppf,
+    investments: wealth.breakdown.investments,
+    allocation: wealth.allocation,
+    lending_outstanding: wealth.breakdown.receivables,
+    borrowing_outstanding: wealth.liability_breakdown.borrowings,
+  });
+  const rentalOutstanding = data.rentalPayments.reduce((sum, item) => sum + Math.max(Number(item.amount_due || 0) - Number(item.amount_received || 0), 0), 0);
+  result.cash_position = {
+    ...result.cash_position,
+    available_now: wealth.breakdown.bank + wealth.breakdown.cash,
+    expected_receivables: wealth.breakdown.receivables + rentalOutstanding,
+    upcoming_obligations: wealth.liability_breakdown.borrowings,
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const month = monthKey();
+  const transactions = data.transactions.filter((item) => !["PENDING", "VOID"].includes(item.transaction_status));
+  const thisMonth = transactions.filter((item) => item.date?.slice(0, 7) === month);
+  result.month_income = thisMonth.filter((item) => item.type === "INCOME").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  result.month_expense = thisMonth.filter((item) => item.type === "EXPENSE").reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  result.month_savings = result.month_income - result.month_expense;
+  const monthly = new Map();
+  transactions.forEach((item) => {
+    const key = item.date?.slice(0, 7);
+    if (!key) return;
+    const row = monthly.get(key) || { month: key, in: 0, out: 0 };
+    if (item.type === "INCOME") row.in += Number(item.amount || 0);
+    if (item.type === "EXPENSE") row.out += Number(item.amount || 0);
+    monthly.set(key, row);
+  });
+  result.cash_flow = allMonths.map((key) => {
+    const row = monthly.get(key) || { in: 0, out: 0 };
+    return { month: key, in: row.in, out: row.out, net: row.in - row.out };
+  });
+  const breakdown = (type, field) => {
+    const grouped = new Map();
+    thisMonth.filter((item) => item.type === type).forEach((item) => {
+      const name = item[field] || "Other";
+      grouped.set(name, (grouped.get(name) || 0) + Number(item.amount || 0));
+    });
+    return [...grouped].map(([name, value]) => ({ name, value })).sort((left, right) => right.value - left.value).slice(0, 8);
+  };
+  result.income_breakdown = breakdown("INCOME", "source");
+  result.expense_breakdown = breakdown("EXPENSE", "category");
+  result.recent_activity = data.transactions.slice().sort((left, right) => (right.date || "").localeCompare(left.date || "")).slice(0, 8);
+  result.project_spend = transactions.filter((item) => item.type === "EXPENSE" && item.project_id)
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  result.active_projects = data.projects.filter((item) => item.status === "ACTIVE").length;
+  result.total_projects = data.projects.length;
+  result.total_budget = data.projects.reduce((sum, item) => sum + Number(item.budget || 0), 0);
+  const budgets = budgetOverview(monthKey()).items;
+  const nextActions = [];
+
+  budgets.forEach((item) => {
+    if (item.unplanned) {
+      if (item.actual > 0) nextActions.push({
+        id: `budget-unplanned:${item.category}`,
+        label: `Plan ${item.category} spending`,
+        detail: `${item.actual} posted spending has no category plan yet`,
+        value: item.actual,
+        path: "/budgets",
+        severity: "warning",
+      });
+    } else if (item.remaining < 0) {
+      nextActions.push({
+        id: `budget-over:${item.id || item.category}`,
+        label: `${item.category} is over plan`,
+        detail: `Posted spend exceeds available plan by ${Math.abs(item.remaining)}`,
+        value: Math.abs(item.remaining),
+        path: "/budgets",
+        severity: "critical",
+      });
+    } else if (item.available > 0 && item.percent_used >= 80) {
+      nextActions.push({
+        id: `budget-near:${item.id || item.category}`,
+        label: `${item.category} is nearing its plan`,
+        detail: `${item.percent_used}% used · ${item.remaining} remains`,
+        value: item.remaining,
+        path: "/budgets",
+        severity: "warning",
+      });
+    }
+  });
+
+  const pendingExpenses = data.transactions.filter((item) =>
+    item.type === "EXPENSE" && item.transaction_status === "PENDING" && item.scope !== "PROJECT" && !item.project_id
+  );
+  if (pendingExpenses.length) nextActions.push({
+    id: "pending-expenses",
+    label: "Review pending expenses",
+    detail: `${pendingExpenses.length} expense record(s) are pending and excluded from posted totals`,
+    value: pendingExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    path: "/expenses",
+    severity: "info",
+  });
+
+  const events = demoPlanningEvents();
+  events.forEach((event) => {
+    if (event.kind === "GOAL") {
+      nextActions.push({
+        id: `goal-due:${event.id}`,
+        label: `Review goal: ${event.detail}`,
+        detail: `Target date ${event.due_date} · ${event.amount} still to fund`,
+        value: event.amount,
+        path: "/goals",
+        severity: event.due_date < today ? "warning" : "info",
+        due_date: event.due_date,
+        source_collection: event.source_collection,
+        source_id: event.source_id,
+      });
+    } else if (!["LENDING", "RECEIVABLE"].includes(event.kind)) {
+      nextActions.push({
+        id: `commitment:${event.id}`,
+        label: event.title,
+        detail: `${event.detail} · due ${event.due_date}`,
+        value: event.amount,
+        path: event.path,
+        severity: event.due_date < today ? "critical" : "warning",
+        due_date: event.due_date,
+        source_collection: event.source_collection,
+        source_id: event.source_id,
+      });
+    }
+  });
+
+  const rank = { critical: 0, warning: 1, info: 2 };
+  const cashOnHand = wealth.breakdown.bank + wealth.breakdown.cash;
+  let projectedCash = cashOnHand;
+  events.filter((event) => event.due_date >= today && ["BORROWING", "LOAN", "INSURANCE", "CONTRIBUTION", "TAX", "SIP", "PPF"].includes(event.kind))
+    .forEach((event) => { projectedCash -= event.amount; });
+  events.filter((event) => event.due_date >= today && ["LENDING", "RECEIVABLE"].includes(event.kind))
+    .forEach((event) => { projectedCash += event.amount; });
+  if (projectedCash < 0) nextActions.push({
+    id: "cash-shortfall",
+    label: "Projected cash may fall below zero",
+    detail: "The dated 30-day outlook falls below zero; this is a forecast, not a posted balance.",
+    value: projectedCash,
+    path: "/planner",
+    severity: "critical",
+    due_date: events.find((event) => event.due_date >= today && event.amount > cashOnHand)?.due_date,
+  });
+  const visibleActions = nextActions
+    .filter((item) => isDemoActionVisible(item, today))
+    .sort((left, right) => rank[left.severity] - rank[right.severity]
+      || (left.due_date || "9999-99-99").localeCompare(right.due_date || "9999-99-99")
+      || left.label.localeCompare(right.label));
+  const budgetAlerts = visibleActions.filter((item) => item.id.startsWith("budget-"));
+  const pendingActions = visibleActions.filter((item) => item.id === "pending-expenses");
+  const otherActions = visibleActions.filter((item) => !item.id.startsWith("budget-") && item.id !== "pending-expenses");
+  result.budget_alerts = budgetAlerts.slice(0, 6);
+  result.next_actions = [...budgetAlerts.slice(0, 3), ...pendingActions.slice(0, 1), ...otherActions].slice(0, 8);
+  return result;
+}
+
+function planningOverview() {
+  const result = clone(staticResponses["/planning/overview"]);
+  const events = demoPlanningEvents();
+  const today = new Date().toISOString().slice(0, 10);
+  result.calendar = events;
+  result.actions = events.filter((item) => isDemoActionVisible(item, today)).slice(0, 30);
+  result.timeline = data.transactions.slice().sort((left, right) => right.date.localeCompare(left.date)).slice(0, 8);
+  return result;
+}
+
 function pathAndQuery(config) {
   const raw = config.url || "/";
   const parsed = new URL(raw, "http://demo.local");
@@ -526,17 +991,17 @@ function enrichParty(party) {
 
 function responseForGet(path, query) {
   if (path === "/sitewalkthrough/status") return { enabled: demoWalkthroughEnabled };
-  if (path === "/dashboard/overview") {
-    const result = clone(staticResponses[path]);
-    const today = new Date().toISOString().slice(0, 10);
-    const visible = (item) => {
-      const state = demoPlanningActionStates.get(item.id);
-      return state?.status !== "RESOLVED" && !(state?.status === "SNOOZED" && state.snoozed_until > today);
-    };
-    result.budget_alerts = (result.budget_alerts || []).filter(visible);
-    result.next_actions = (result.next_actions || []).filter(visible);
-    return result;
-  }
+  if (path === "/dashboard/overview") return dashboardOverview();
+  if (path === "/networth") return currentNetWorth();
+  if (path === "/planning/overview") return planningOverview();
+  if (path === "/income/summary") return transactionSummary("INCOME", "source");
+  if (path === "/expenses/summary") return transactionSummary("EXPENSE", "category");
+  if (path === "/savings/summary") return savingsSummary();
+  if (path === "/pf-ppf/summary") return pfPpfSummary();
+  if (path === "/loans/summary") return loanSummary();
+  if (path === "/insurance/summary") return insuranceSummary();
+  if (path === "/rental/summary") return rentalSummary();
+  if (path === "/farms/summary") return farmsSummary();
   if (path === "/networth/history") return clone(netWorthHistory);
   if (path === "/recurring") return clone(recurringOverview());
   if (path === "/calendar") {
@@ -745,27 +1210,82 @@ function responseForGet(path, query) {
   if (path === "/version-history") return clone(staticResponses["/version-history"]);
   if (path.startsWith("/error-logs")) return clone(staticResponses["/error-logs?scope=all"]);
   if (path === "/planning/inbox") return clone(staticResponses["/planning/inbox"]);
-  if (path === "/planning/overview") return clone(staticResponses["/planning/overview"]);
+  if (path === "/planning/overview") return planningOverview();
   if (path === "/debt-payoff/plan") return { status: "not_found" };
   if (path === "/planning/ownership") return clone(staticResponses["/planning/ownership"]);
   if (path === "/networth/history") return clone(netWorthHistory);
-  if (path === "/farms/summary") return clone(staticResponses["/farms/summary"]);
   const list = listForPath(path);
   if (list) return clone(list);
   return {};
+}
+
+function transactionBalanceImpact(transaction) {
+  if (!transaction || ["PENDING", "VOID"].includes(transaction.transaction_status)) return 0;
+  const amount = Number(transaction.amount) || 0;
+  if (transaction.type === "INCOME") return amount;
+  if (transaction.type === "EXPENSE") return -amount;
+  return 0;
+}
+
+function applyTransactionBalance(transaction, multiplier) {
+  if (!transaction?.account_id) return;
+  const account = data.accounts.find((item) => item.id === transaction.account_id);
+  if (account) account.current_balance += transactionBalanceImpact(transaction) * multiplier;
 }
 
 function mutate(config, path, method) {
   const body = typeof config.data === "string" ? (() => { try { return JSON.parse(config.data); } catch (_) { return {}; } })() : (config.data || {});
   const planningAction = path.match(/^\/planning\/actions\/([^/]+)$/);
   if (method === "post" && planningAction) {
-    const state = { status: body.action === "postpone" ? "SNOOZED" : "RESOLVED", snoozed_until: body.snoozed_until || null };
+    const action = String(body.action || "resolve").toLowerCase();
+    if (action === "record_payment") {
+      const amount = Number(body.amount) || 0;
+      const source = body.source_collection;
+      const id = body.source_id;
+      const collections = {
+        lendings: data.lending,
+        loans: data.loans,
+        insurance: data.insurance,
+        rent_payments: data.rentalPayments,
+        farm_rent_payments: data.farmRentPayments,
+      };
+      const record = collections[source]?.find((item) => item.id === id);
+      if (!record) throw new Error("Payment source record not found");
+      let remaining;
+      if (source === "lendings") {
+        remaining = Math.max(Number(record.amount || 0) - (record.repayments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0), 0);
+      } else if (source === "loans") {
+        remaining = Number(record.outstanding || 0);
+      } else if (source === "insurance") {
+        remaining = Number(record.premium || 0);
+      } else {
+        remaining = Math.max(Number(record.amount_due || 0) - Number(record.amount_received || 0), 0);
+      }
+      if (amount <= 0) throw new Error("Enter a payment amount greater than zero");
+      if (amount > remaining + 0.009) throw new Error(`Amount exceeds outstanding balance of ${remaining.toFixed(2)}`);
+      const payment = { date: new Date().toISOString().slice(0, 10), amount, note: "Recorded from Action Center" };
+      if (source === "lendings") record.repayments = [...(record.repayments || []), payment];
+      else if (source === "loans") {
+        record.outstanding = Math.max(0, Number(record.outstanding || 0) - amount);
+        record.payments = [...(record.payments || []), payment];
+        record.last_payment_date = payment.date;
+      } else if (source === "insurance") {
+        record.payments = [...(record.payments || []), payment];
+        record.last_payment_date = payment.date;
+      } else {
+        record.amount_received = Number(record.amount_received || 0) + amount;
+        record.status = record.amount_received >= Number(record.amount_due || 0) ? "COLLECTED" : "PARTIAL";
+        record.receipts = [...(record.receipts || []), payment];
+      }
+    }
+    const state = { status: action === "postpone" ? "SNOOZED" : "RESOLVED", snoozed_until: body.snoozed_until || null };
     demoPlanningActionStates.set(decodeURIComponent(planningAction[1]), state);
     return { status: state.status };
   }
   if (method === "post" && path === "/networth/snapshot") {
     const date = new Date().toISOString().slice(0, 10);
-    const snapshot = { date, net_worth: netWorth.net_worth, assets: netWorth.total_assets, liabilities: netWorth.total_liabilities, source: "manual" };
+    const current = currentNetWorth();
+    const snapshot = { date, net_worth: current.net_worth, assets: current.total_assets, liabilities: current.total_liabilities, source: "manual" };
     const existing = netWorthHistory.items.findIndex((item) => item.date === date);
     if (existing >= 0) netWorthHistory.items[existing] = snapshot;
     else netWorthHistory.items.push(snapshot);
@@ -887,7 +1407,7 @@ function mutate(config, path, method) {
   const pathWithoutId = path.replace(/\/[^/]+$/, "") || path;
   const routeToList = {
     "/rental/properties": data.rentalProperties, "/rental/payments": data.rentalPayments, "/rental/rent-payments": data.rentalPayments,
-    "/farms/rent-payments": data.rentalPayments, "/projects": data.projects, "/parties": data.parties,
+    "/farms/rent-payments": data.farmRentPayments, "/projects": data.projects, "/parties": data.parties,
     "/transactions": data.transactions, "/accounts": data.accounts, "/family": data.family, "/lending": data.lending,
     "/savings": data.savings, "/pf-ppf": data.pfPpf, "/investments": data.investments, "/assets": data.assets,
     "/liabilities": data.liabilities, "/loans": data.loans, "/insurance": data.insurance, "/farms": data.farms,
@@ -935,13 +1455,9 @@ function mutate(config, path, method) {
       ...(path === "/accounts" ? { current_balance: Number(body.opening_balance) || 0 } : {}),
     };
     if (path === "/transactions") {
-      const account = data.accounts.find((item) => item.id === created.account_id);
       created.transaction_status = created.transaction_status || "POSTED";
       created.record_source = created.record_source || "MANUAL";
-      if (account && !["PENDING", "VOID"].includes(created.transaction_status)) {
-        const amount = Number(created.amount) || 0;
-        account.current_balance += created.type === "INCOME" ? amount : created.type === "EXPENSE" ? -amount : 0;
-      }
+      applyTransactionBalance(created, 1);
     }
     list.unshift(created);
     return clone(created);
@@ -949,10 +1465,16 @@ function mutate(config, path, method) {
   const rowId = path.slice(path.lastIndexOf("/") + 1);
   const index = list.findIndex((item) => item.id === rowId);
   if (method === "put" && index >= 0) {
-    list[index] = { ...list[index], ...body, id: rowId };
+    const previous = list[index];
+    list[index] = { ...previous, ...body, id: rowId };
+    if (pathWithoutId === "/transactions") {
+      applyTransactionBalance(previous, -1);
+      applyTransactionBalance(list[index], 1);
+    }
     return clone(list[index]);
   }
   if (method === "delete" && index >= 0) {
+    if (pathWithoutId === "/transactions") applyTransactionBalance(list[index], -1);
     list.splice(index, 1);
     return { status: "deleted" };
   }
