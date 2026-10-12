@@ -61,60 +61,11 @@ async def _all_events(days=30):
 async def planning_overview(user: dict = Depends(require_admin)):
     today = now_utc().date()
     horizon = (today + timedelta(days=30)).isoformat()
-    events = []
-
-    # Kept in one helper so planner, inbox and exports always agree.
     events = await _all_events(30)
-    """legacy event construction below is intentionally bypassed"""
-    lendings = []
-    for item in lendings:
-        paid = sum(round2(r.get("amount", 0)) for r in item.get("repayments", []) or [])
-        outstanding = round2(max(item.get("amount", 0) - paid, 0))
-        due = item.get("due_date")
-        if outstanding and due and due <= horizon:
-            label = "Repay borrowing" if item.get("direction") == "BORROWED" else "Recover lending"
-            events.append(_event(label, due, outstanding, "BORROWING" if item.get("direction") == "BORROWED" else "LENDING", "/lending", item.get("counterparty") or "Counterparty", "lendings", str(item["_id"])))
-
-    loans = []
-    for item in loans:
-        due = item.get("next_due_date") or item.get("due_date")
-        if due and due <= horizon:
-            events.append(_event("Loan EMI", due, item.get("emi", 0), "LOAN", "/loans", item.get("name") or item.get("lender") or "Loan", "loans", str(item["_id"])))
-
-    policies = await db.insurance.find({"deleted_at": {"$exists": False}, "status": {"$ne": "Lapsed"}}).to_list(500)
-    for item in ():
-        due = item.get("renewal_date")
-        if due and due <= horizon:
-            events.append(_event("Renew insurance", due, item.get("premium", 0), "INSURANCE", "/insurance", item.get("policy_name") or "Policy", "insurance", str(item["_id"])))
-
-    for collection, title, path, label in ():
-        payments = await db[collection].find({"deleted_at": {"$exists": False}, "status": {"$in": ["PENDING", "PARTIAL"]}}).to_list(1000)
-        for item in payments:
-            due = item.get("due_date")
-            outstanding = round2(max(item.get("amount_due", 0) - item.get("amount_received", 0), 0))
-            if due and outstanding and due <= horizon:
-                events.append(_event(title, due, outstanding, "RECEIVABLE", path, item.get(label) or item.get("tenant") or "Collection", collection, str(item["_id"])))
-
-    goals = []
-    for item in goals:
-        due = item.get("target_date")
-        remaining = round2(max(item.get("target_amount", 0) - item.get("current_amount", 0), 0))
-        if due and remaining and due <= horizon:
-            events.append(_event("Fund goal", due, remaining, "GOAL", "/goals", item.get("name") or "Goal", "goals", str(item["_id"])))
-
-    funds = []
-    for item in funds:
-        due = item.get("next_contribution_date") or item.get("contribution_due_date")
-        if due and due <= horizon:
-            events.append(_event(f"Contribute to {item.get('kind') or 'fund'}", due, item.get("expected_contribution", 0), "CONTRIBUTION", "/pf-ppf", item.get("institution") or "Fund", "pf_ppf", str(item["_id"])))
-
-    reminders = []
-    for item in reminders:
-        due = item.get("due_date")
-        if due and due <= horizon:
-            events.append(_event(item.get("title") or "Reminder", due, item.get("amount", 0), "REMINDER", "/notifications", item.get("message") or "", "notifications", str(item["_id"])))
-
-    events.sort(key=lambda item: item["due_date"])
+    policies = await db.insurance.find({
+        "deleted_at": {"$exists": False},
+        "status": {"$ne": "Lapsed"},
+    }).to_list(500)
     overdue = [item for item in events if item["due_date"] < today.isoformat()]
     due_soon = [item for item in events if today.isoformat() <= item["due_date"] <= horizon]
 
@@ -134,15 +85,28 @@ async def planning_overview(user: dict = Depends(require_admin)):
     minimum_balance = cash_on_hand
     minimum_balance_date = today.isoformat()
     daily_projection = []
-    for event in due_soon:
+    projection_events = [
+        {**event, "projection_date": today.isoformat(), "overdue": True}
+        for event in overdue
+    ] + [
+        {**event, "projection_date": event["due_date"], "overdue": False}
+        for event in due_soon
+    ]
+    projection_events.sort(key=lambda item: (item["projection_date"], item["due_date"], item["title"]))
+    for event in projection_events:
         if event["kind"] in INCOMING_KINDS:
             running_balance += event["amount"]
         elif event["kind"] in OUTGOING_KINDS:
             running_balance -= event["amount"]
         running_balance = round2(running_balance)
         if running_balance < minimum_balance:
-            minimum_balance, minimum_balance_date = running_balance, event["due_date"]
-        daily_projection.append({"date": event["due_date"], "balance": running_balance, "event": event["title"]})
+            minimum_balance, minimum_balance_date = running_balance, event["projection_date"]
+        daily_projection.append({
+            "date": event["projection_date"],
+            "balance": running_balance,
+            "event": event["title"],
+            "overdue": event["overdue"],
+        })
     projected = running_balance
 
     liquid_months = round(cash_on_hand / actual_expense, 1) if actual_expense > 0 else None
@@ -189,31 +153,20 @@ async def planning_overview(user: dict = Depends(require_admin)):
         event["status"] = state.get("status", "OPEN")
         active_events.append(event)
     tight_dates = [x for x in daily_projection if x["balance"] < 0]
-    return {"actions": active_events[:30], "calendar": events[:60], "timeline": recent, "forecast": {"cash_on_hand": cash_on_hand, "recorded_income": actual_income, "recorded_expense": actual_expense, "scheduled_out": scheduled_out, "scheduled_in": scheduled_in, "projected_balance": projected, "minimum_balance": minimum_balance, "minimum_balance_date": minimum_balance_date, "tight_dates": tight_dates, "daily_projection": daily_projection}, "health": health}
+    overdue_out = round2(sum(item["amount"] for item in overdue if item["kind"] in OUTGOING_KINDS))
+    overdue_in = round2(sum(item["amount"] for item in overdue if item["kind"] in INCOMING_KINDS))
+    return {"actions": active_events[:30], "calendar": events[:60], "timeline": recent, "forecast": {"cash_on_hand": cash_on_hand, "recorded_income": actual_income, "recorded_expense": actual_expense, "overdue_out": overdue_out, "overdue_in": overdue_in, "scheduled_out": scheduled_out, "scheduled_in": scheduled_in, "projected_balance": projected, "minimum_balance": minimum_balance, "minimum_balance_date": minimum_balance_date, "tight_dates": tight_dates, "daily_projection": daily_projection}, "health": health}
 
 @router.get("/planning/ownership")
 async def ownership_summary(user: dict = Depends(require_admin)):
-    buckets = {}
-    balances, accounts = await compute_account_balances()
-    for item in accounts:
-        owner = item.get("owner") or "Self"
-        share = round2(balances.get(str(item["_id"]), 0) * (float(item.get("ownership_percent", 100) or 100) / 100))
-        buckets[owner] = round2(buckets.get(owner, 0) + share)
-    for collection, field, multiplier in (("savings", "current_value", 1), ("investments", "current_value", 1), ("assets", "current_value", 1), ("pf_ppf", "current_balance", 1), ("liabilities", "outstanding", -1), ("loans", "outstanding", -1)):
-        for item in await db[collection].find({"deleted_at": {"$exists": False}}).to_list(2000):
-            owner = item.get("owner") or "Self"
-            share = round2(multiplier * item.get(field, 0) * (float(item.get("ownership_percent", 100) or 100) / 100))
-            buckets[owner] = round2(buckets.get(owner, 0) + share)
-    # Real-life entities commonly live outside the investment ledger. Their
-    # estimated value belongs in the ownership view without pretending that an
-    # insurance cover amount is an owned asset.
-    entity_buckets = defaultdict(float)
-    for collection, field in (("rental_properties", "current_value"), ("farms", "estimated_value"), ("projects", "asset_value")):
-        for item in await db[collection].find({"deleted_at": {"$exists": False}}).to_list(2000):
-            owner = item.get("owner") or ("Farm / business" if collection in ("farms", "projects") else "Self")
-            share = round2(item.get(field, 0) * (float(item.get("ownership_percent", 100) or 100) / 100))
-            buckets[owner] = round2(buckets.get(owner, 0) + share)
-            entity_buckets[owner] += share
+    from api_wealth import networth_data
+
+    balance_sheet = await networth_data()
+    buckets = defaultdict(float)
+    for position in balance_sheet["positions"]:
+        buckets[position["owner"]] += (
+            position["owned_value"] if position["side"] == "asset" else -position["owned_value"]
+        )
     groups = {"mine": 0, "family": 0, "farm_business": 0, "consolidated": 0}
     family_names = {x.get("name") for x in await db.family_members.find({"deleted_at": {"$exists": False}}).to_list(500)}
     for owner, value in buckets.items():
@@ -221,7 +174,11 @@ async def ownership_summary(user: dict = Depends(require_admin)):
         if owner == "Self": groups["mine"] += value
         elif owner in family_names or owner == "Family": groups["family"] += value
         else: groups["farm_business"] += value
-    return {"owners": [{"name": owner, "value": value} for owner, value in sorted(buckets.items(), key=lambda row: -row[1])], "views": {key: round2(value) for key, value in groups.items()}}
+    return {
+        "owners": [{"name": owner, "value": round2(value)} for owner, value in sorted(buckets.items(), key=lambda row: -row[1])],
+        "views": {key: round2(value) for key, value in groups.items()},
+        "note": "Consolidated values use recorded asset and liability positions after ownership percentages. Link a property, farm or project to its canonical balance-sheet asset; operational values are not added separately, so linked records cannot inflate totals.",
+    }
 
 
 @router.post("/planning/actions/{action_id}")

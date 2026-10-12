@@ -140,6 +140,14 @@ async def financial_snapshot(user: dict = Depends(require_admin)):
     own.append(["Owner / entity", "Tracked net value"])
     for row in ownership["owners"]: own.append([row["name"], row["value"]])
     own.append([]); own.append(["My finances", ownership["views"]["mine"]]); own.append(["Family finances", ownership["views"]["family"]]); own.append(["Farm / business finances", ownership["views"]["farm_business"]]); own.append(["Consolidated", ownership["views"]["consolidated"]])
+    positions = wb.create_sheet("Balance sheet positions")
+    positions.append(["Position", "Type", "Side", "Owner", "Ownership %", "Recorded value", "Recognized share", "Valuation source", "Value as of"])
+    for item in wealth["positions"]:
+        positions.append([
+            item["name"], item["category"], item["side"], item["owner"],
+            item["ownership_percent"], item["gross_value"], item["owned_value"],
+            item["source"], item["as_of"] or "Not recorded",
+        ])
     commits = wb.create_sheet("Commitments")
     commits.append(["Due date", "Action", "Detail", "Amount", "Type"])
     for event in plan["calendar"]: commits.append([event["due_date"], event["title"], event["detail"], event["amount"], event["kind"]])

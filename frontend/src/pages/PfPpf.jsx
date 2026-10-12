@@ -21,6 +21,8 @@ export default function PfPpf() {
     { key: "ownership_percent", label: "Ownership %", type: "number", default: 100 },
     { key: "opening_balance", label: "Opening Balance (₹)", type: "money", default: 0 },
     { key: "current_balance", label: "Current Balance (₹)", type: "money", required: true },
+    { key: "valuation_source", label: "Valuation Source", type: "select", options: ["Statement", "Market quote", "Professional valuation", "Manual estimate", "Other"] },
+    { key: "valuation_date", label: "Balance as of", type: "date" },
     { key: "maturity_date", label: "Maturity Date", type: "date" },
     { key: "next_contribution_date", label: "Next contribution due", type: "date" },
     { key: "expected_contribution", label: "Expected contribution (₹)", type: "money" },

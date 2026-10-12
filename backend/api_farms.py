@@ -3,12 +3,20 @@ from collections import defaultdict
 from datetime import date
 from calendar import monthrange
 from fastapi import APIRouter, Depends
-from core import db, serialize, oid, now_utc, require_admin, round2
+from core import db, serialize, oid, now_utc, require_admin, round2, validate_balance_sheet_asset_link
 from crud import make_crud_router
 from pymongo.errors import DuplicateKeyError
 
 router = APIRouter(tags=["farms"])
-crud, coll = make_crud_router("farms", "farms")
+
+
+async def _prepare_farm(payload, _existing):
+    if "balance_sheet_asset_id" in payload:
+        payload["balance_sheet_asset_id"] = await validate_balance_sheet_asset_link(payload["balance_sheet_asset_id"])
+    return payload
+
+
+crud, coll = make_crud_router("farms", "farms", pre_save=_prepare_farm)
 
 
 def _annual_rent(farm: dict, due_year: int) -> float:

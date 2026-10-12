@@ -10,6 +10,7 @@ import { inr, todayISO } from "../lib/format";
 
 export default function Projects() {
   const { data, loading, error, refetch } = useFetch("/projects");
+  const assets = useFetch("/assets");
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({});
@@ -18,6 +19,7 @@ export default function Projects() {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const projects = data || [];
+  const assetOptions = assets.data || [];
   const totalBudget = projects.reduce((a, p) => a + (p.budget || 0), 0);
   const totalSpent = projects.reduce((a, p) => a + (p.spent || 0), 0);
 
@@ -86,6 +88,7 @@ export default function Projects() {
           <Field label="Start Date"><Input type="date" value={form.start_date || ""} onChange={(e) => set("start_date", e.target.value)} /></Field>
           <Field label="Target Completion"><Input type="date" value={form.target_completion_date || ""} onChange={(e) => set("target_completion_date", e.target.value)} /></Field>
           <Field label="Progress %"><Input type="number" value={form.progress || ""} onChange={(e) => set("progress", e.target.value)} /></Field>
+          <Field label="Linked balance-sheet asset"><Select value={form.balance_sheet_asset_id || ""} onChange={(e) => set("balance_sheet_asset_id", e.target.value)}><option value="">No linked asset</option>{assetOptions.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</Select></Field>
           <Field label="Image URL"><Input value={form.image_url || ""} onChange={(e) => set("image_url", e.target.value)} /></Field>
           <Field label="Description" className="sm:col-span-2"><Textarea value={form.description || ""} onChange={(e) => set("description", e.target.value)} /></Field>
         </div>

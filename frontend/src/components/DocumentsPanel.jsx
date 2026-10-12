@@ -1,9 +1,10 @@
 import React, { useRef, useState } from "react";
-import { Upload, FileText, Download, Trash2, File, Pencil, ShieldCheck, ShieldOff } from "lucide-react";
+import { Upload, FileText, Download, Trash2, File, Pencil, ShieldCheck, ShieldOff, Users } from "lucide-react";
 import { Card, Button, StateBlock, Select, Field, Input, Modal, Badge, cx } from "./ui";
 import { useFetch } from "../lib/useFetch";
 import api, { apiError, docUrl } from "../lib/api";
 import { fmtDate } from "../lib/format";
+import { useAuth } from "../lib/auth";
 
 const DEFAULT_CATS = ["Project", "Bank", "Payment", "Contract", "Invoice", "Receipt", "Loan", "Lending", "Goal", "Investment", "Drawing", "Certificate", "ITR", "Income Tax", "Income Proof", "Identity", "Property", "Insurance", "Other"];
 
@@ -13,7 +14,11 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
   const base = entityId ? `/documents?related_entity_id=${encodeURIComponent(entityId)}${entityType ? `&related_entity_type=${encodeURIComponent(entityType)}` : ""}` : "/documents";
   const url = query ? `${base}${base.includes("?") ? "&" : "?"}${query}` : base;
   const { data, loading, error, refetch } = useFetch(url, [url]);
-  const links = useFetch("/documents/link-options");
+  const { user } = useAuth();
+  const canManage = ["SUPER_ADMIN", "PROJECT_ADMIN"].includes(user?.role);
+  const canUpload = ["SUPER_ADMIN", "PROJECT_ADMIN", "PARTY_USER"].includes(user?.role);
+  const links = useFetch(showLinks && canManage ? "/documents/link-options" : "/health", [showLinks, canManage]);
+  const users = useFetch(canManage ? "/users" : "/health", [canManage]);
   const fileRef = useRef();
   const cats = categories || DEFAULT_CATS;
   const [open, setOpen] = useState(false);
@@ -23,6 +28,10 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
   const [err, setErr] = useState("");
   const [rename, setRename] = useState(null);
   const [renameVal, setRenameVal] = useState("");
+  const [sharing, setSharing] = useState(null);
+  const [sharedUsers, setSharedUsers] = useState([]);
+  const [shareError, setShareError] = useState("");
+  const [shareBusy, setShareBusy] = useState(false);
 
   const docs = data || [];
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -54,12 +63,35 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
   };
   const download = (dc) => window.open(docUrl(dc.id), "_blank");
   const del = async (dc) => { if (window.confirm(`Delete ${dc.filename}?`)) { await api.delete(`/documents/${dc.id}`); refetch(); onChanged && onChanged(); } };
+  const openSharing = async (document) => {
+    setSharing(document);
+    setShareError("");
+    try {
+      const { data: access } = await api.get(`/documents/${document.id}/access`);
+      setSharedUsers(access.map((person) => person.id));
+    } catch (error) {
+      setShareError(apiError(error));
+    }
+  };
+  const saveSharing = async () => {
+    setShareBusy(true);
+    setShareError("");
+    try {
+      await api.put(`/documents/${sharing.id}/access`, { user_ids: sharedUsers });
+      setSharing(null);
+      await refetch(true);
+    } catch (error) {
+      setShareError(apiError(error));
+    } finally {
+      setShareBusy(false);
+    }
+  };
 
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-line">
         <div><h3 className="font-display font-semibold text-ink">{title}</h3>{!projectId && <p className="text-xs text-subink mt-0.5">Keep policy, loan, property and payment records beside your financial plan.</p>}</div>
-        <Button size="sm" onClick={() => { setErr(""); setFile(null); setForm({ category: defaultCategory, official: "true" }); setOpen(true); }} data-testid="upload-doc"><Upload size={15} /> Upload</Button>
+        {canUpload && <Button size="sm" onClick={() => { setErr(""); setFile(null); setForm({ category: defaultCategory, official: "true" }); setOpen(true); }} data-testid="upload-doc"><Upload size={15} /> Upload</Button>}
       </div>
       <StateBlock loading={loading} error={error} empty={docs.length === 0} emptyText="No documents uploaded yet." onRetry={refetch}>
         <div className="divide-y divide-line">
@@ -73,9 +105,10 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
               {dc.official === true && <Badge tone="blue"><ShieldCheck size={11} /> official</Badge>}
               {dc.official === false && <Badge tone="amber"><ShieldOff size={11} /> unofficial</Badge>}
               <Badge tone="gray">{dc.category}</Badge>
-              <button onClick={() => { setRename(dc); setRenameVal((dc.filename || "").replace(/\.[^.]+$/, "")); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" data-testid={`rename-${dc.id}`}><Pencil size={15} /></button>
+              {canManage && <button onClick={() => openSharing(dc)} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" aria-label={`Manage sharing for ${dc.filename}`}><Users size={15} /></button>}
+              {canManage && <button onClick={() => { setRename(dc); setRenameVal((dc.filename || "").replace(/\.[^.]+$/, "")); }} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" data-testid={`rename-${dc.id}`}><Pencil size={15} /></button>}
               <button onClick={() => download(dc)} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-brand" data-testid={`download-${dc.id}`}><Download size={16} /></button>
-              <button onClick={() => del(dc)} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-expense"><Trash2 size={16} /></button>
+              {canManage && <button onClick={() => del(dc)} className="p-1.5 rounded-lg text-subink hover:bg-white hover:text-expense"><Trash2 size={16} /></button>}
             </div>
           ))}
         </div>
@@ -106,6 +139,24 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
       <Modal open={!!rename} onClose={() => setRename(null)} title="Rename document" size="sm">
         <Field label="New name (extension kept automatically)"><Input autoFocus value={renameVal} onChange={(e) => setRenameVal(e.target.value)} data-testid="rename-input" /></Field>
         <div className="flex gap-2 pt-4"><Button variant="secondary" className="flex-1" onClick={() => setRename(null)}>Cancel</Button><Button className="flex-1" onClick={doRename} data-testid="rename-save">Save</Button></div>
+      </Modal>
+      <Modal open={!!sharing} onClose={() => !shareBusy && setSharing(null)} title="Share document" size="sm">
+        <p className="text-sm text-subink">Choose which active household collaborators can view and download this document. Access is read-only.</p>
+        <div className="mt-4 space-y-2">
+          {users.loading && <p className="text-sm text-subink">Loading household collaborators…</p>}
+          {users.error && <p className="text-sm text-expense" role="alert">Could not load household collaborators.</p>}
+          {(users.data || []).filter((person) => person.role === "HOUSEHOLD_USER" && person.active !== false).map((person) => (
+            <label key={person.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5">
+              <input type="checkbox" checked={sharedUsers.includes(person.id)} onChange={(event) => setSharedUsers((current) => event.target.checked ? [...current, person.id] : current.filter((id) => id !== person.id))} />
+              <span><span className="block text-sm font-medium text-ink">{person.name}</span><span className="block text-xs text-faint">{person.email}</span></span>
+            </label>
+          ))}
+          {!users.loading && !users.error && !(users.data || []).some((person) => person.role === "HOUSEHOLD_USER" && person.active !== false) && (
+            <p className="text-sm text-subink">No active household collaborators are available to share with.</p>
+          )}
+        </div>
+        {shareError && <p className="mt-3 text-sm text-expense" role="alert">{shareError}</p>}
+        <div className="mt-4 flex justify-end gap-2"><Button variant="secondary" disabled={shareBusy} onClick={() => setSharing(null)}>Cancel</Button><Button disabled={shareBusy || users.loading || !!users.error} onClick={saveSharing}>{shareBusy ? "Saving…" : "Save access"}</Button></div>
       </Modal>
     </Card>
   );

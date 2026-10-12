@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import date
 from calendar import monthrange
 from fastapi import APIRouter, Depends
-from core import db, serialize, oid, now_utc, require_admin, round2, normalize_date
+from core import db, serialize, oid, now_utc, require_admin, round2, normalize_date, validate_balance_sheet_asset_link
 from pymongo.errors import DuplicateKeyError
 
 router = APIRouter(tags=["rental"])
@@ -81,6 +81,10 @@ async def list_properties(user: dict = Depends(require_admin)):
 
 @router.post("/rental/properties")
 async def create_property(payload: dict, user: dict = Depends(require_admin)):
+    if "balance_sheet_asset_id" in payload:
+        payload["balance_sheet_asset_id"] = await validate_balance_sheet_asset_link(payload["balance_sheet_asset_id"])
+    if payload.get("valuation_date"):
+        payload["valuation_date"] = normalize_date(payload["valuation_date"])
     payload.setdefault("units", [])
     payload["created_at"] = now_utc()
     res = await db.rental_properties.insert_one(payload)
@@ -90,6 +94,10 @@ async def create_property(payload: dict, user: dict = Depends(require_admin)):
 @router.put("/rental/properties/{item_id}")
 async def update_property(item_id: str, payload: dict, user: dict = Depends(require_admin)):
     payload.pop("id", None); payload.pop("_id", None)
+    if "balance_sheet_asset_id" in payload:
+        payload["balance_sheet_asset_id"] = await validate_balance_sheet_asset_link(payload["balance_sheet_asset_id"])
+    if payload.get("valuation_date"):
+        payload["valuation_date"] = normalize_date(payload["valuation_date"])
     payload["updated_at"] = now_utc()
     await db.rental_properties.update_one({"_id": oid(item_id)}, {"$set": payload})
     return serialize(await db.rental_properties.find_one({"_id": oid(item_id)}))

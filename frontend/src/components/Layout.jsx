@@ -103,6 +103,7 @@ const HOUSEHOLD_NAV = [{
     { name: "Daily Spending", path: "/daily-spending", icon: CreditCard, tid: "nav-daily-spending" },
     { name: "Income", path: "/income", icon: TrendingUp, tid: "nav-income" },
     { name: "Expenses", path: "/expenses", icon: CreditCard, tid: "nav-expenses" },
+    { name: "Shared Documents", path: "/documents", icon: FileText, tid: "nav-documents" },
   ],
 }];
 const HOUSEHOLD_MOBILE = [

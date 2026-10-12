@@ -267,6 +267,7 @@ async def overview(user: dict = Depends(require_admin)):
         "liability_allocation": [
             {"name": "Loans", "value": nw["liability_breakdown"]["loans"]},
             {"name": "Borrowings", "value": nw["liability_breakdown"]["borrowings"]},
+            {"name": "Account overdrafts", "value": nw["liability_breakdown"]["account_overdrafts"]},
         ],
     }
 

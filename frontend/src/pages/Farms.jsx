@@ -12,9 +12,11 @@ import api, { apiError } from "../lib/api";
 export default function Farms() {
   const { data: s, loading, error, refetch } = useFetch("/farms/summary");
   const farms = useFetch("/farms");
+  const assets = useFetch("/assets");
   const [filter, setFilter] = useState("all");
 
   const farmOpts = (farms.data || []).map((f) => ({ value: f.id, label: `${f.name} (${f.number})` }));
+  const assetOptions = (assets.data || []).map((asset) => ({ value: asset.id, label: asset.name }));
   const farmMap = Object.fromEntries((farms.data || []).map((f) => [f.id, f.name]));
 
   const farmFields = [
@@ -27,6 +29,9 @@ export default function Farms() {
     { key: "owner", label: "Owner / entity", default: "Farm / business" },
     { key: "ownership_percent", label: "Ownership %", type: "number", default: 100 },
     { key: "estimated_value", label: "Estimated value (₹)", type: "money" },
+    { key: "valuation_source", label: "Valuation Source", type: "select", options: ["Statement", "Market quote", "Professional valuation", "Manual estimate", "Other"] },
+    { key: "valuation_date", label: "Value as of", type: "date" },
+    { key: "balance_sheet_asset_id", label: "Linked balance-sheet asset", type: "select", options: assetOptions },
     { key: "annual_rent_enabled", label: "Rented out yearly? (Yes/No)", type: "select", options: [{ value: true, label: "Yes" }, { value: false, label: "No" }], default: false },
     { key: "tenant", label: "Yearly Lease Tenant" },
     { key: "annual_rent", label: "Annual Rent (₹)", type: "money" },
@@ -99,7 +104,7 @@ export default function Farms() {
       </StateBlock>
 
       <div className="space-y-6">
-        <CrudManager title="Farms" endpoint="/farms" addLabel="Add farm" fields={farmFields} columns={farmCols} onChanged={() => { refetch(); farms.refetch(); }}
+        <CrudManager title="Farms" endpoint="/farms" addLabel="Add farm" fields={farmFields} columns={farmCols} deps={[assets.data]} onChanged={() => { refetch(); farms.refetch(); }}
           transform={(farm) => ({ ...farm, annual_rent_enabled: farm.annual_rent_enabled === true || farm.annual_rent_enabled === "true" })} />
         <AnnualRentCollection onChanged={refetch} />
         <div>

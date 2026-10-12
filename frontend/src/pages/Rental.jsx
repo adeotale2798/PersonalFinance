@@ -10,13 +10,18 @@ import { inr } from "../lib/format";
 export default function Rental() {
   const { data: s, loading, error, refetch } = useFetch("/rental/summary");
   const props = useFetch("/rental/properties");
+  const assets = useFetch("/assets");
   const propNames = (props.data || []).map((p) => ({ value: p.name, label: p.name }));
+  const assetOptions = (assets.data || []).map((asset) => ({ value: asset.id, label: asset.name }));
 
   const propFields = [
     { key: "name", label: "Property Name", required: true, full: true },
     { key: "owner", label: "Owner", default: "Self" },
     { key: "ownership_percent", label: "Ownership %", type: "number", default: 100 },
     { key: "current_value", label: "Current value (₹)", type: "money" },
+    { key: "valuation_source", label: "Valuation Source", type: "select", options: ["Statement", "Market quote", "Professional valuation", "Manual estimate", "Other"] },
+    { key: "valuation_date", label: "Value as of", type: "date" },
+    { key: "balance_sheet_asset_id", label: "Linked balance-sheet asset", type: "select", options: assetOptions },
     { key: "address", label: "Address", full: true },
     { key: "image_url", label: "Image URL", full: true },
     { key: "tenant", label: "Tenant (creates a unit)" },
@@ -76,6 +81,7 @@ export default function Rental() {
       <div className="space-y-6">
         <CrudManager title="Properties" endpoint="/rental/properties" addLabel="Add property" fields={propFields} columns={propCols}
           onChanged={() => { refetch(); props.refetch(); }}
+          deps={[assets.data]}
           transform={(p) => {
             const { tenant, monthly_rent, deposit, rent_start_date, rent_due_day, annual_increase_percent, ...rest } = p;
             const body = { ...rest };

@@ -19,6 +19,13 @@ NEXT_WEEK = (TODAY_DATE + timedelta(days=7)).isoformat()
 IMPORT_SYMBOL = f"E2E{uuid4().hex[:6].upper()}"
 
 
+def _owned_value(row, value_key):
+    ownership_percent = row.get("ownership_percent")
+    if ownership_percent is None:
+        ownership_percent = 100
+    return row[value_key] * ownership_percent / 100
+
+
 class Api:
     def __init__(self, client, token):
         self.client = client
@@ -129,7 +136,7 @@ def test_household_account_sharing_read_use_and_revocation(client, admin):
     household = Api(client, login.json()["access_token"])
     assert household.get("/accounts").json() == []
     assert household.get("/dashboard/overview").status_code == 403
-    assert household.get("/documents").status_code == 403
+    assert household.get("/documents").json() == []
 
     grant = admin.post(f"/accounts/{account['id']}/access", json={
         "user_id": collaborator_id,
@@ -404,29 +411,41 @@ def test_demo_finance_coverage_and_dashboard_reconciliation(admin):
 
     accounts = admin.get("/accounts").json()
     assert networth["breakdown"]["cash"] == pytest.approx(sum(
-        account["current_balance"] for account in accounts if account["type"] == "CASH"
+        max(_owned_value(account, "current_balance"), 0)
+        for account in accounts if account["type"] == "CASH"
     ))
     assert networth["breakdown"]["bank"] == pytest.approx(sum(
-        account["current_balance"] for account in accounts if account["type"] != "CASH"
+        max(_owned_value(account, "current_balance"), 0)
+        for account in accounts if account["type"] != "CASH"
     ))
-    assert networth["breakdown"]["savings"] == pytest.approx(admin.get("/savings/summary").json()["total"])
-    assert networth["breakdown"]["pf_ppf"] == pytest.approx(admin.get("/pf-ppf/summary").json()["total"])
+    assert networth["liability_breakdown"]["account_overdrafts"] == pytest.approx(sum(
+        abs(min(_owned_value(account, "current_balance"), 0)) for account in accounts
+    ))
+    savings = admin.get("/savings").json()
+    pf_ppf = admin.get("/pf-ppf").json()
+    assert networth["breakdown"]["savings"] == pytest.approx(sum(
+        _owned_value(row, "current_value") for row in savings
+    ))
+    assert networth["breakdown"]["pf_ppf"] == pytest.approx(sum(
+        _owned_value(row, "current_balance") for row in pf_ppf
+    ))
     investments = admin.get("/investments").json()
     assets = admin.get("/assets").json()
     liabilities = admin.get("/liabilities").json()
     loans = admin.get("/loans").json()
     assert networth["breakdown"]["investments"] == pytest.approx(sum(
-        row["current_value"] for row in investments
+        _owned_value(row, "current_value") for row in investments
     ))
     assert networth["breakdown"]["property"] == pytest.approx(sum(
-        row["current_value"] for row in assets
+        _owned_value(row, "current_value") for row in assets
     ))
-    loan_liabilities = sum(row["outstanding"] for row in liabilities) + sum(
-        row["outstanding"] for row in loans
+    loan_liabilities = sum(_owned_value(row, "outstanding") for row in liabilities) + sum(
+        _owned_value(row, "outstanding") for row in loans
     )
     assert networth["liability_breakdown"]["loans"] == pytest.approx(loan_liabilities)
     assert networth["total_liabilities"] == pytest.approx(
         loan_liabilities + borrowed["outstanding"]
+        + networth["liability_breakdown"]["account_overdrafts"]
     )
     assert networth["total_assets"] == pytest.approx(sum(networth["breakdown"].values()))
     assert networth["net_worth"] == pytest.approx(networth["total_assets"] - networth["total_liabilities"])
@@ -511,6 +530,122 @@ def test_generic_crud_modules_read_write_delete_and_ownership(admin):
         deleted = admin.delete(f"{endpoint}/{row['id']}")
         assert deleted.status_code == 200, f"{endpoint}: {deleted.text}"
         assert all(item["id"] != row["id"] for item in admin.get(endpoint).json())
+
+
+def test_investment_activity_and_valuation_history_are_dated_and_audited(admin):
+    created = admin.post("/investments", json={
+        "name": f"E2E valuation {uuid4().hex[:6]}",
+        "type": "Mutual Fund",
+        "cost": 700,
+        "current_value": 1000,
+        "owner": "Self",
+    })
+    assert created.status_code == 200, created.text
+    investment_id = created.json()["id"]
+
+    contribution = admin.post(f"/investments/{investment_id}/activity", json={
+        "type": "CONTRIBUTION", "date": TODAY, "amount": 700, "note": "Initial purchase",
+    })
+    assert contribution.status_code == 200, contribution.text
+    assert contribution.json()["type"] == "CONTRIBUTION"
+    assert admin.get(f"/investments/{investment_id}/activity").json()[0]["id"] == contribution.json()["id"]
+    assert admin.post(f"/investments/{investment_id}/activity", json={
+        "type": "INVALID", "date": TODAY, "amount": 1,
+    }).status_code == 422
+    assert admin.post(f"/investments/{investment_id}/activity", json={
+        "type": "FEE", "date": (TODAY_DATE + timedelta(days=1)).isoformat(), "amount": 1,
+    }).status_code == 422
+
+    valuation = admin.post(f"/investments/{investment_id}/valuations", json={
+        "current_value": 1100, "date": TODAY, "source": "Statement",
+    })
+    assert valuation.status_code == 200, valuation.text
+    assert valuation.json()["current_position_updated"] is True
+    current = next(row for row in admin.get("/investments").json() if row["id"] == investment_id)
+    assert current["current_value"] == 1100
+
+    older_valuation = admin.post(f"/investments/{investment_id}/valuations", json={
+        "current_value": 900,
+        "date": (TODAY_DATE - timedelta(days=2)).isoformat(),
+        "source": "Manual estimate",
+    })
+    assert older_valuation.status_code == 200, older_valuation.text
+    assert older_valuation.json()["current_position_updated"] is False
+    assert admin.get(f"/investments/{investment_id}/valuations").json()[0]["current_value"] == 1100
+    current = next(row for row in admin.get("/investments").json() if row["id"] == investment_id)
+    assert current["current_value"] == 1100
+    assert admin.delete(f"/investments/{investment_id}").status_code == 200
+
+
+def test_operational_property_links_reuse_a_single_balance_sheet_asset(admin):
+    property_before = admin.get("/networth").json()["breakdown"]["property"]
+    asset = admin.post("/assets", json={
+        "name": f"E2E canonical property {uuid4().hex[:6]}",
+        "type": "Property",
+        "current_value": 250000,
+        "owner": "Self",
+        "valuation_date": TODAY,
+        "valuation_source": "Professional valuation",
+    })
+    assert asset.status_code == 200, asset.text
+    asset_id = asset.json()["id"]
+
+    property_response = admin.post("/rental/properties", json={
+        "name": "E2E linked rental",
+        "current_value": 250000,
+        "balance_sheet_asset_id": asset_id,
+        "units": [],
+    })
+    assert property_response.status_code == 200, property_response.text
+    assert property_response.json()["balance_sheet_asset_id"] == asset_id
+    farm = admin.post("/farms", json={
+        "name": "E2E linked farm",
+        "number": f"F-{uuid4().hex[:6]}",
+        "estimated_value": 250000,
+        "balance_sheet_asset_id": asset_id,
+    })
+    assert farm.status_code == 200, farm.text
+    assert farm.json()["balance_sheet_asset_id"] == asset_id
+    project = admin.post("/projects", json={
+        "name": "E2E linked project",
+        "budget": 0,
+        "balance_sheet_asset_id": asset_id,
+    })
+    assert project.status_code == 200, project.text
+    assert project.json()["balance_sheet_asset_id"] == asset_id
+    assert admin.delete(f"/assets/{asset_id}").status_code == 409
+
+    invalid = admin.post("/rental/properties", json={
+        "name": "E2E invalid asset link",
+        "balance_sheet_asset_id": "0" * 24,
+    })
+    assert invalid.status_code == 422
+    networth = admin.get("/networth").json()
+    matching_positions = [row for row in networth["positions"] if row["id"] == asset_id]
+    assert len(matching_positions) == 1
+    assert networth["breakdown"]["property"] - property_before == pytest.approx(250000)
+
+
+def test_overdue_commitments_are_included_in_the_forward_cash_projection(admin):
+    due_date = (TODAY_DATE - timedelta(days=3)).isoformat()
+    borrowing = admin.post("/lending", json={
+        "direction": "BORROWED",
+        "counterparty": "E2E overdue projection",
+        "amount": 125,
+        "date": due_date,
+        "due_date": due_date,
+    })
+    assert borrowing.status_code == 200, borrowing.text
+    overview = admin.get("/planning/overview")
+    assert overview.status_code == 200, overview.text
+    forecast = overview.json()["forecast"]
+    assert forecast["overdue_out"] >= 125
+    assert any(item["overdue"] and item["date"] == TODAY for item in forecast["daily_projection"])
+    assert forecast["projected_balance"] == pytest.approx(
+        forecast["cash_on_hand"] + forecast["scheduled_in"] + forecast["overdue_in"]
+        - forecast["scheduled_out"] - forecast["overdue_out"]
+    )
+    assert admin.delete(f"/lending/{borrowing.json()['id']}").status_code == 200
 
 
 def test_transaction_balance_reconciliation_and_dashboard_refresh(admin):
@@ -1081,6 +1216,32 @@ def test_private_areas_notifications_errors_exports_and_import_review(admin, cli
     assert admin.put(f"/documents/{document_id}", json={"filename": "renamed evidence"}).json()["filename"] == "renamed evidence.txt"
     downloaded = client.get(f"/api/documents/{document_id}/download", headers={"Authorization": f"Bearer {admin.token}"})
     assert downloaded.status_code == 200 and downloaded.content == b"Local dummy evidence"
+    household_user = admin.post("/users", json={
+        "name": "E2E Document Collaborator",
+        "email": f"document-{uuid4().hex[:8]}@nivara.local",
+        "role": "HOUSEHOLD_USER",
+        "password": "LocalE2E-Document-2026!",
+    })
+    assert household_user.status_code == 200, household_user.text
+    household_login = client.post("/api/auth/login", json={
+        "email": household_user.json()["email"],
+        "password": "LocalE2E-Document-2026!",
+    })
+    assert household_login.status_code == 200, household_login.text
+    household_headers = {"Authorization": f"Bearer {household_login.json()['access_token']}"}
+    assert client.get("/api/documents", headers=household_headers).json() == []
+    assert client.get(f"/api/documents/{document_id}/download", headers=household_headers).status_code == 403
+    access = admin.put(f"/documents/{document_id}/access", json={
+        "user_ids": [household_user.json()["id"]],
+    })
+    assert access.status_code == 200, access.text
+    assert [row["id"] for row in admin.get(f"/documents/{document_id}/access").json()] == [household_user.json()["id"]]
+    assert [row["id"] for row in client.get("/api/documents", headers=household_headers).json()] == [document_id]
+    shared_download = client.get(f"/api/documents/{document_id}/download", headers=household_headers)
+    assert shared_download.status_code == 200 and shared_download.content == b"Local dummy evidence"
+    assert admin.put(f"/documents/{document_id}/access", json={"user_ids": []}).status_code == 200
+    assert client.get("/api/documents", headers=household_headers).json() == []
+    assert client.get(f"/api/documents/{document_id}/download", headers=household_headers).status_code == 403
     proof = admin.post("/proofs/extract", files={"file": ("e2e.pdf", b"%PDF-1.4", "application/pdf")})
     assert proof.status_code == 200 and proof.json()["review_required"] is True
     assert proof.json()["extraction"]["document_id"]
