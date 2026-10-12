@@ -167,6 +167,14 @@ async def update_user(item_id: str, payload: dict, admin: dict = Depends(require
     # editing an ordinary collaborator.
     if target.get("role") == "SUPER_ADMIN" and not is_platform_admin(admin):
         raise HTTPException(status_code=403, detail="Only the platform administrator can manage workspace owners")
+    if target.get("role") == HOUSEHOLD_ROLE and (
+        update.get("active") is False
+        or ("role" in update and update["role"] != HOUSEHOLD_ROLE)
+    ):
+        await db.documents.update_many(
+            {"shared_with": item_id},
+            {"$pull": {"shared_with": item_id}, "$set": {"updated_at": now_utc()}},
+        )
     await collection.update_one({"_id": oid(item_id)}, {"$set": update})
     await log_audit(admin, "update_user", "users", item_id)
     return serialize(await collection.find_one({"_id": oid(item_id)}))
@@ -178,6 +186,11 @@ async def delete_user(item_id: str, admin: dict = Depends(require_admin)):
     target = await collection.find_one({"_id": oid(item_id)})
     if target and target.get("role") == "SUPER_ADMIN":
         raise HTTPException(status_code=403, detail="Cannot delete the super admin")
+    if target and target.get("role") == HOUSEHOLD_ROLE:
+        await db.documents.update_many(
+            {"shared_with": item_id},
+            {"$pull": {"shared_with": item_id}, "$set": {"updated_at": now_utc()}},
+        )
     await collection.delete_one({"_id": oid(item_id)})
     await log_audit(admin, "delete_user", "users", item_id)
     return {"status": "deleted"}

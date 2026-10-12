@@ -50,7 +50,7 @@ function Protected({ children }) {
   const { pathname } = useLocation();
   if (checking) return <div className="min-h-screen flex items-center justify-center"><Spinner className="w-7 h-7 text-brand" /></div>;
   if (!user && !demoMode) return <Navigate to="/login" replace />;
-  if (user?.role === "HOUSEHOLD_USER" && !["/accounts", "/daily-spending", "/income", "/expenses"].includes(pathname)) {
+  if (user?.role === "HOUSEHOLD_USER" && !["/accounts", "/daily-spending", "/income", "/expenses", "/documents"].includes(pathname)) {
     return <Navigate to="/accounts" replace />;
   }
   return user.role === "PARTY_USER" ? <PartyPortal /> : <Layout>{children}</Layout>;

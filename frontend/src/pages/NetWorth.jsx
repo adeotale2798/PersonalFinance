@@ -5,7 +5,7 @@ import { PageHeader, StateBlock, Card, Badge } from "../components/ui";
 import KpiCard from "../components/KpiCard";
 import { ChartCard, Donut, Bars, TrendLine } from "../components/charts";
 import CrudManager from "../components/CrudManager";
-import { inr } from "../lib/format";
+import { fmtDate, inr } from "../lib/format";
 
 export default function NetWorth() {
   const { data, loading, error, refetch } = useFetch("/networth");
@@ -20,6 +20,8 @@ export default function NetWorth() {
     { key: "current_value", label: "Current Value (₹)", type: "money", required: true },
     { key: "owner", label: "Owner", type: "select", options: ownerOpts, default: "Self" },
     { key: "ownership_percent", label: "Ownership %", type: "number", default: 100 },
+    { key: "valuation_source", label: "Valuation Source", type: "select", options: ["Statement", "Market quote", "Professional valuation", "Manual estimate", "Other"] },
+    { key: "valuation_date", label: "Value as of", type: "date" },
     { key: "notes", label: "Notes", type: "textarea", full: true },
   ];
   const assetCols = [
@@ -36,6 +38,8 @@ export default function NetWorth() {
     { key: "due_date", label: "Due Date", type: "date" },
     { key: "owner", label: "Owner", type: "select", options: ownerOpts, default: "Self" },
     { key: "ownership_percent", label: "Ownership %", type: "number", default: 100 },
+    { key: "valuation_source", label: "Valuation Source", type: "select", options: ["Statement", "Market quote", "Professional valuation", "Manual estimate", "Other"] },
+    { key: "valuation_date", label: "Value as of", type: "date" },
   ];
   const liabCols = [
     { key: "name", label: "Liability", render: (r) => <span className="font-medium text-ink">{r.name}</span> },
@@ -79,6 +83,32 @@ export default function NetWorth() {
                     <div className="num font-semibold text-ink mt-1">{inr(v, { compact: true })}</div>
                   </div>
                 ))}
+              </div>
+            </Card>
+            <Card className="overflow-hidden mb-6">
+              <div className="px-5 py-4 border-b border-line">
+                <h3 className="font-display font-semibold text-ink">Balance-sheet positions</h3>
+                <p className="text-xs text-subink mt-1">Totals reflect your recorded ownership share. Link property, farm or project records to a canonical asset; operational values are never added twice.</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-faint overline border-b border-line">
+                    <tr>{["Position", "Type", "Owner", "Share", "Value as recorded", "Your share", "Source · as of"].map((label) => <th key={label} className="px-4 py-3 whitespace-nowrap">{label}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {(data.positions || []).map((position) => (
+                      <tr key={`${position.category}-${position.id}`} className="border-b border-line/70">
+                        <td className="px-4 py-3 font-medium text-ink">{position.name}</td>
+                        <td className="px-4 py-3 capitalize text-subink">{position.category.replace(/_/g, " ")}</td>
+                        <td className="px-4 py-3">{position.owner}</td>
+                        <td className="px-4 py-3 num">{position.ownership_percent}%</td>
+                        <td className="px-4 py-3 num">{inr(position.gross_value)}</td>
+                        <td className="px-4 py-3 num font-semibold">{position.side === "liability" ? "−" : ""}{inr(position.owned_value)}</td>
+                        <td className="px-4 py-3 text-xs text-subink whitespace-nowrap">{position.source} · {position.as_of ? fmtDate(position.as_of) : "date not recorded"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </Card>
           </>

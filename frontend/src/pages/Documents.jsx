@@ -3,10 +3,12 @@ import { FileText, FolderOpen, Receipt, Users } from "lucide-react";
 import { PageHeader, Segmented } from "../components/ui";
 import DocumentsPanel from "../components/DocumentsPanel";
 import { useFetch } from "../lib/useFetch";
+import { useAuth } from "../lib/auth";
 
 export default function Documents() {
   const [tab, setTab] = useState("all");
-  const family = useFetch("/family");
+  const { user } = useAuth();
+  const family = useFetch(user?.role === "HOUSEHOLD_USER" ? "/health" : "/family", [user?.role]);
   const memberOptions = (family.data || []).map((f) => ({ value: f.id, label: f.name }));
 
   const panels = {

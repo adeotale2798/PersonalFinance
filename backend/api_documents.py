@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, Query
 from fastapi.responses import Response
-from core import db, raw_db, serialize, oid, now_utc, require_admin, get_current_user, workspace_for, set_workspace
+from core import db, raw_db, serialize, oid, now_utc, require_admin, get_current_user, workspace_for, set_workspace, log_audit
 from storage import put_object, get_object
 
 router = APIRouter(tags=["documents"])
@@ -19,11 +19,14 @@ async def list_documents(category: str | None = None, related_entity_id: str | N
                          financial_year: str | None = None, family_member_id: str | None = None, project_id: str | None = None,
                          party_id: str | None = None, related_entity_type: str | None = None, user: dict = Depends(get_current_user)):
     is_party = user.get("role") == "PARTY_USER"
-    if not is_party and user.get("role") not in ("SUPER_ADMIN", "PROJECT_ADMIN"):
-        raise HTTPException(status_code=403, detail="Admin or party access required")
+    is_household = user.get("role") == "HOUSEHOLD_USER"
+    if not is_party and not is_household and user.get("role") not in ("SUPER_ADMIN", "PROJECT_ADMIN"):
+        raise HTTPException(status_code=403, detail="Admin, household or party access required")
     q: dict[str, Any] = {"deleted_at": {"$exists": False}}
     if is_party:
         q["party_id"] = user.get("party_id")
+    if is_household:
+        q["shared_with"] = str(user["_id"])
     if category: q["category"] = category
     if related_entity_id: q["related_entity_id"] = related_entity_id
     if related_entity_type: q["related_entity_type"] = related_entity_type
@@ -36,10 +39,58 @@ async def list_documents(category: str | None = None, related_entity_id: str | N
     return [serialize(d) for d in docs]
 
 
+@router.get("/documents/{item_id}/access")
+async def get_document_access(item_id: str, user: dict = Depends(require_admin)):
+    doc = await db.documents.find_one({"_id": oid(item_id), "deleted_at": {"$exists": False}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    shared_with = doc.get("shared_with", [])
+    users = await db.users.find({
+        "_id": {"$in": [oid(user_id) for user_id in shared_with]},
+        "role": "HOUSEHOLD_USER",
+        "active": {"$ne": False},
+    }).to_list(500) if shared_with else []
+    return [{"id": str(item["_id"]), "name": item.get("name"), "email": item.get("email")} for item in users]
+
+
+@router.put("/documents/{item_id}/access")
+async def update_document_access(item_id: str, payload: dict, user: dict = Depends(require_admin)):
+    doc = await db.documents.find_one({"_id": oid(item_id), "deleted_at": {"$exists": False}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    user_ids = payload.get("user_ids")
+    if not isinstance(user_ids, list) or any(not isinstance(user_id, str) for user_id in user_ids):
+        raise HTTPException(status_code=422, detail="Provide a list of household user IDs")
+    user_ids = list(dict.fromkeys(user_ids))
+    valid_users = await db.users.find({
+        "_id": {"$in": [oid(user_id) for user_id in user_ids]},
+        "role": "HOUSEHOLD_USER",
+        "active": {"$ne": False},
+    }).to_list(500) if user_ids else []
+    valid_ids = {str(item["_id"]) for item in valid_users}
+    if valid_ids != set(user_ids):
+        raise HTTPException(status_code=422, detail="Sharing is limited to active household collaborators in this workspace")
+    await db.documents.update_one({"_id": doc["_id"]}, {"$set": {
+        "shared_with": user_ids,
+        "updated_at": now_utc(),
+    }})
+    await log_audit(user, "update_document_access", "documents", item_id, {"shared_with": user_ids})
+    return {"shared_with": user_ids}
+
+
 @router.get("/documents/link-options")
 async def document_link_options(user: dict = Depends(require_admin)):
     """Small, stable lookup list for attaching evidence to an exact record."""
-    sources = (("loans", "loans", "name"), ("insurance", "insurance", "policy_name"), ("farms", "farms", "name"), ("rental_property", "rental_properties", "name"), ("lending", "lendings", "counterparty"), ("asset", "assets", "name"))
+    sources = (
+        ("loans", "loans", "name"),
+        ("insurance", "insurance", "policy_name"),
+        ("farms", "farms", "name"),
+        ("rental_property", "rental_properties", "name"),
+        ("project", "projects", "name"),
+        ("investment", "investments", "name"),
+        ("lending", "lendings", "counterparty"),
+        ("asset", "assets", "name"),
+    )
     options = []
     for entity_type, collection, label in sources:
         for row in await db[collection].find({"deleted_at": {"$exists": False}}).to_list(1000):
@@ -107,6 +158,7 @@ async def upload_document(
         "project_id": project_id,
         "party_id": party_id,
         "family_member_id": family_member_id,
+        "shared_with": [],
         "storage_path": result["path"],
         "notes": notes,
         "uploaded_by": user["email"],
@@ -152,12 +204,12 @@ async def download_document(item_id: str, authorization: str = Header(None), aut
     user = await raw_db.users.find_one({"_id": oid(payload["sub"]), "active": {"$ne": False}})
     if not user:
         raise HTTPException(status_code=401, detail="User not found or inactive")
-    if user.get("role") == "HOUSEHOLD_USER":
-        raise HTTPException(status_code=403, detail="Document access is not included in household account sharing")
     set_workspace(workspace_for(user))
     doc = await db.documents.find_one({"_id": oid(item_id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if user.get("role") == "HOUSEHOLD_USER" and str(user["_id"]) not in doc.get("shared_with", []):
+        raise HTTPException(status_code=403, detail="This document has not been shared with your account")
     if user.get("role") == "PARTY_USER" and doc.get("party_id") != user.get("party_id"):
         raise HTTPException(status_code=403, detail="This document is not available to your party")
     data, content_type = get_object(doc["storage_path"])

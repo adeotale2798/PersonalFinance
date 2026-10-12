@@ -1,9 +1,10 @@
 """Generic CRUD router factory for admin-owned collections."""
+import inspect
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from core import db, serialize, oid, now_utc, require_admin, log_audit, normalize_date, validate_financial_payload
 
 
-def make_crud_router(name: str, collection: str, pre_save=None, list_sort=None):
+def make_crud_router(name: str, collection: str, pre_save=None, list_sort=None, before_delete=None):
     """Build a standard CRUD APIRouter for a collection.
 
     pre_save(payload, existing) -> payload  (optional transform / computed fields)
@@ -33,7 +34,8 @@ def make_crud_router(name: str, collection: str, pre_save=None, list_sort=None):
         payload = validate_financial_payload(payload)
         payload = normalize_dates(payload)
         if pre_save:
-            payload = pre_save(payload, None)
+            transformed = pre_save(payload, None)
+            payload = await transformed if inspect.isawaitable(transformed) else transformed
         payload["created_at"] = now_utc()
         payload["updated_at"] = now_utc()
         payload["created_by"] = user["email"]
@@ -56,7 +58,8 @@ def make_crud_router(name: str, collection: str, pre_save=None, list_sort=None):
             raise HTTPException(status_code=404, detail=f"{name} not found")
         payload = normalize_dates(validate_financial_payload(payload))
         if pre_save:
-            payload = pre_save(payload, existing)
+            transformed = pre_save(payload, existing)
+            payload = await transformed if inspect.isawaitable(transformed) else transformed
         payload.pop("id", None)
         payload.pop("_id", None)
         payload["updated_at"] = now_utc()
@@ -70,6 +73,10 @@ def make_crud_router(name: str, collection: str, pre_save=None, list_sort=None):
         existing = await coll.find_one({"_id": oid(item_id)})
         if not existing:
             raise HTTPException(status_code=404, detail=f"{name} not found")
+        if before_delete:
+            result = before_delete(item_id, existing)
+            if inspect.isawaitable(result):
+                await result
         await coll.delete_one({"_id": oid(item_id)})
         await log_audit(user, "delete", collection, item_id)
         return {"status": "deleted", "id": item_id}

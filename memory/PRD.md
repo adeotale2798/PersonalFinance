@@ -53,6 +53,27 @@ documents (upload/download).
 - All API endpoints currently enforce admin-only. Party-user portals (login-scoped views honoring
   the stored permission grants) are a deferred slice.
 
+## Wealth integrity and collaboration
+- Net-worth totals are based on recorded balance-sheet positions and each position's ownership
+  percentage. A negative bank/cash ledger is classified as a liability; a zero ownership share is
+  respected. Ownership summaries and exported balance-sheet detail use the same positions.
+- Manual values can record valuation source and date. Missing valuation provenance stays explicitly
+  missing; record creation or edit dates are not presented as valuation dates.
+- Rental properties, farms and projects may link to one canonical asset record. Their operating
+  values are not added as a second balance-sheet position, and linked assets cannot be deleted until
+  those links are removed.
+- Investment activity supports dated contributions, sales, distributions and fees, plus a separate
+  dated valuation history. The existing value-minus-recorded-cost figure is labeled an unrealized
+  change, not an annualized or time-weighted return. No IRR/TWR is reported without complete,
+  validated cash-flow and valuation data.
+- Planning uses one normalized dated-commitment stream. Overdue commitments are treated as due
+  today in forward projections, while posted transactions remain separate from forecasts.
+- Household collaborators can view documents only when a workspace admin explicitly shares them.
+  That access is read-only, auditable and revoked when the collaborator is deactivated, removed or
+  changed to another role; unshared documents remain private.
+- Transaction reconciliation records statement differences without silently changing ledger
+  balances. Internal transfers remain transfers and do not count as income or expenses.
+
 ## Backlog / Next
 - P1: Party-user login portals that enforce the permission grants (scoped project views)
 - P1: Recurring transactions automation; budgets vs actual alerts

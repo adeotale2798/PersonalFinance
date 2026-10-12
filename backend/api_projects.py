@@ -2,7 +2,7 @@
 from collections import defaultdict
 import re
 from fastapi import APIRouter, Depends, HTTPException
-from core import db, serialize, oid, now_utc, require_admin, get_current_user, round2, hash_password, log_audit
+from core import db, serialize, oid, now_utc, require_admin, get_current_user, round2, hash_password, log_audit, validate_balance_sheet_asset_link
 
 router = APIRouter(tags=["projects"])
 
@@ -26,6 +26,8 @@ async def list_projects(user: dict = Depends(require_admin)):
 
 @router.post("/projects")
 async def create_project(payload: dict, user: dict = Depends(require_admin)):
+    if "balance_sheet_asset_id" in payload:
+        payload["balance_sheet_asset_id"] = await validate_balance_sheet_asset_link(payload["balance_sheet_asset_id"])
     payload["budget"] = round2(payload.get("budget", 0))
     payload.setdefault("status", "PLANNING")
     payload.setdefault("currency", "INR")
@@ -47,6 +49,8 @@ async def get_project(item_id: str, user: dict = Depends(require_admin)):
 async def update_project(item_id: str, payload: dict, user: dict = Depends(require_admin)):
     payload.pop("id", None); payload.pop("_id", None)
     payload.pop("spent", None); payload.pop("received", None); payload.pop("remaining", None)
+    if "balance_sheet_asset_id" in payload:
+        payload["balance_sheet_asset_id"] = await validate_balance_sheet_asset_link(payload["balance_sheet_asset_id"])
     if "budget" in payload:
         payload["budget"] = round2(payload["budget"])
     payload["updated_at"] = now_utc()

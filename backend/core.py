@@ -249,6 +249,19 @@ def normalize_date(value):
     raise HTTPException(status_code=400, detail="Use a valid date: YYYY-MM-DD (for example, 2026-09-20)")
 
 
+async def validate_balance_sheet_asset_link(asset_id):
+    """Validate an optional reference to the canonical balance-sheet asset."""
+    if asset_id in (None, ""):
+        return None
+    asset = await db.assets.find_one({
+        "_id": oid(asset_id),
+        "deleted_at": {"$exists": False},
+    })
+    if not asset:
+        raise HTTPException(status_code=422, detail="Choose an existing balance-sheet asset")
+    return str(asset["_id"])
+
+
 async def log_audit(actor: dict, action: str, entity: str, entity_id: str = None, meta: dict = None):
     await db.audit_events.insert_one({
         "actor": actor.get("email") if actor else "system",
