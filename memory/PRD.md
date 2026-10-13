@@ -59,13 +59,16 @@ documents (upload/download).
   respected. Ownership summaries and exported balance-sheet detail use the same positions.
 - Manual values can record valuation source and date. Missing valuation provenance stays explicitly
   missing; record creation or edit dates are not presented as valuation dates.
+- Net-worth positions expose source, valuation date, age and a recorded/estimate/incomplete label.
+  Data Quality flags missing provenance, manually estimated values and valuations older than one
+  year; these checks never modify any financial value.
 - Rental properties, farms and projects may link to one canonical asset record. Their operating
   values are not added as a second balance-sheet position, and linked assets cannot be deleted until
   those links are removed.
 - Investment activity supports dated contributions, sales, distributions and fees, plus a separate
   dated valuation history. The existing value-minus-recorded-cost figure is labeled an unrealized
-  change, not an annualized or time-weighted return. No IRR/TWR is reported without complete,
-  validated cash-flow and valuation data.
+  change. Per-investment XIRR is reported only when dated cash flows and a dated valuation provide
+  a solvable, unambiguous series; otherwise the UI explains what is missing. This is not TWR.
 - Planning uses one normalized dated-commitment stream. Overdue commitments are treated as due
   today in forward projections, while posted transactions remain separate from forecasts.
 - Household collaborators can view documents only when a workspace admin explicitly shares them.
@@ -73,10 +76,29 @@ documents (upload/download).
   changed to another role; unshared documents remain private.
 - Transaction reconciliation records statement differences without silently changing ledger
   balances. Internal transfers remain transfers and do not count as income or expenses.
+- CSV bank statement imports now preview rows and projected ledger changes before approval. Applying
+  rows creates dated posted transactions against a selected account; the opening balance is not
+  overwritten. A closing-balance mismatch is recorded for review, never auto-adjusted. Undo restores
+  imported transactions and reconciliation metadata only when the affected records are unchanged.
+- Property scenario planning compares a user-assumption baseline with an immediate purchase, loan
+  payments and delayed rent over 12 months. It is explicitly hypothetical, excludes existing
+  scheduled commitments, fees, tax and maintenance, and never writes to the ledger.
+
+## Consent-based household pilot readiness
+- Recruit a small number of households only after explicit, informed consent and explain the
+  sensitive financial data involved, what is collected, who can access it, retention/deletion, and
+  how to withdraw.
+- Offer synthetic/demo data as the default first session. Use real statements or account values only
+  when the household independently chooses to enter them and understands the access model.
+- Record usability feedback separately from financial records. Do not solicit account credentials,
+  full card numbers, passwords, or unnecessary identity documents.
+- Review authorization, backups, access revocation, incident response and data deletion before a
+  real-data pilot. The pilot is not considered run until participants are actually recruited and
+  consented; implementation work does not itself enroll households.
 
 ## Backlog / Next
 - P1: Party-user login portals that enforce the permission grants (scoped project views)
 - P1: Recurring transactions automation; budgets vs actual alerts
-- P2: Bank statement import + reconciliation; contracts & work items; obligations/payment lifecycle
+- P2: Bank/provider parser coverage and statement import + reconciliation; contracts & work items; obligations/payment lifecycle
 - P2: Reports & exports (CSV/PDF); notifications
 - P3: AI intelligence; dashboard widget customization

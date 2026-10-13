@@ -8,6 +8,9 @@ class Cursor:
     def __init__(self, rows):
         self.rows = rows
 
+    def sort(self, _fields):
+        return self
+
     async def to_list(self, _limit):
         return self.rows
 
@@ -54,6 +57,7 @@ def test_networth_uses_owned_shares_and_classifies_overdrafts(monkeypatch):
         "owner": "Alex", "ownership_percent": 50,
     }]))
     monkeypatch.setattr(api_wealth, "db", SimpleNamespace(
+        transactions=Collection([]),
         loans=Collection([{
             "_id": "loan-1", "name": "Loan", "outstanding": 200,
             "owner": "Self", "ownership_percent": 25,

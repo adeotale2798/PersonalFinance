@@ -34,6 +34,8 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
   const [shareBusy, setShareBusy] = useState(false);
 
   const docs = data || [];
+  const linkOptions = Array.isArray(links.data) ? links.data : [];
+  const collaborators = Array.isArray(users.data) ? users.data : [];
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const upload = async () => {
@@ -128,7 +130,7 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
             {showOfficial && <Field label="Paperwork Type"><Select value={form.official} onChange={(e) => set("official", e.target.value)} data-testid="doc-official"><option value="true">Official</option><option value="false">Unofficial</option></Select></Field>}
             {showTaxFields && <Field label="Financial Year"><Input value={form.financial_year || ""} onChange={(e) => set("financial_year", e.target.value)} placeholder="2025-26" /></Field>}
             {memberOptions && <Field label="Belongs To"><Select value={form.family_member_id || ""} onChange={(e) => set("family_member_id", e.target.value)}><option value="">Self</option>{memberOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></Field>}
-            {showLinks && <Field label="Attach to record" className="col-span-2"><Select value={form.related_entity_id || ""} onChange={(e) => { const opt=(links.data||[]).find(x=>x.id===e.target.value); set("related_entity_id", e.target.value); set("related_entity_type", opt?.type || ""); }}><option value="">No linked record</option>{(links.data||[]).map((o)=><option key={`${o.type}-${o.id}`} value={o.id}>{o.type.replace(/_/g," ")} · {o.label}</option>)}</Select></Field>}
+            {showLinks && canManage && <Field label="Attach to record" className="col-span-2"><Select value={form.related_entity_id || ""} onChange={(e) => { const opt=linkOptions.find(x=>x.id===e.target.value); set("related_entity_id", e.target.value); set("related_entity_type", opt?.type || ""); }}><option value="">No linked record</option>{linkOptions.map((o)=><option key={`${o.type}-${o.id}`} value={o.id}>{o.type.replace(/_/g," ")} · {o.label}</option>)}</Select></Field>}
           </div>
           <Field label="Notes"><Input value={form.notes || ""} onChange={(e) => set("notes", e.target.value)} /></Field>
           {err && <div className="text-sm text-expense bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{err}</div>}
@@ -145,13 +147,13 @@ export default function DocumentsPanel({ projectId, relatedEntityId, relatedEnti
         <div className="mt-4 space-y-2">
           {users.loading && <p className="text-sm text-subink">Loading household collaborators…</p>}
           {users.error && <p className="text-sm text-expense" role="alert">Could not load household collaborators.</p>}
-          {(users.data || []).filter((person) => person.role === "HOUSEHOLD_USER" && person.active !== false).map((person) => (
+          {canManage && collaborators.filter((person) => person.role === "HOUSEHOLD_USER" && person.active !== false).map((person) => (
             <label key={person.id} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5">
               <input type="checkbox" checked={sharedUsers.includes(person.id)} onChange={(event) => setSharedUsers((current) => event.target.checked ? [...current, person.id] : current.filter((id) => id !== person.id))} />
               <span><span className="block text-sm font-medium text-ink">{person.name}</span><span className="block text-xs text-faint">{person.email}</span></span>
             </label>
           ))}
-          {!users.loading && !users.error && !(users.data || []).some((person) => person.role === "HOUSEHOLD_USER" && person.active !== false) && (
+          {canManage && !users.loading && !users.error && !collaborators.some((person) => person.role === "HOUSEHOLD_USER" && person.active !== false) && (
             <p className="text-sm text-subink">No active household collaborators are available to share with.</p>
           )}
         </div>

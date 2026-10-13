@@ -41,6 +41,40 @@ def test_parses_csv_rows():
     assert rows == [{"Symbol": "TATAMOTORS", "Quantity": "120"}]
 
 
+def test_classifies_bank_statement_debits_and_credits_without_applying_them():
+    debit = {"Date": "2026-10-01", "Description": "Rent", "Debit": "100.00", "Credit": "", "Balance": "900"}
+    credit = {"Date": "2026-10-02", "Description": "Salary", "Debit": "", "Credit": "500.00", "Balance": "1400"}
+
+    debit_preview = api_imports._preview_candidate(debit, api_imports.classify_row(debit))
+    credit_preview = api_imports._preview_candidate(credit, api_imports.classify_row(credit))
+
+    assert debit_preview["kind"] == credit_preview["kind"] == "BANK_TRANSACTION"
+    assert debit_preview["amount"] == -100
+    assert credit_preview["amount"] == 500
+    assert debit_preview["statement_balance"] == 900
+    assert debit_preview["can_apply"] is True
+    assert credit_preview["can_apply"] is True
+
+
+def test_bank_statement_preview_rejects_ambiguous_direction():
+    row = {"Date": "2026-10-01", "Description": "Unclear", "Amount": "100"}
+
+    candidate = api_imports._preview_candidate(row, api_imports.classify_row(row))
+
+    assert candidate["can_apply"] is False
+    assert "unambiguous" in candidate["errors"][0]
+
+
+def test_bank_statement_preview_requires_guidance_for_possible_transfers():
+    row = {"Date": "2026-10-01", "Description": "NEFT transfer to savings", "Debit": "100"}
+
+    candidate = api_imports._preview_candidate(row, api_imports.classify_row(row))
+
+    assert candidate["kind"] == "NEEDS_GUIDANCE"
+    assert candidate["can_apply"] is False
+    assert "record it as a transfer" in candidate["reason"]
+
+
 def test_preview_reports_invalid_amount_and_date_without_allowing_apply():
     candidate = api_imports._preview_candidate(
         {"Symbol": "TATAMOTORS", "Realized P&L": "not-money", "Trade Date": "31/02/2025"},

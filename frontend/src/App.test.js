@@ -2,6 +2,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import api from "./lib/api";
+import { demoAdapter } from "./lib/demoData";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 jest.setTimeout(60000);
@@ -44,6 +45,27 @@ describe("application route smoke test", () => {
     localStorage.removeItem("nivara_token");
   });
 
+  it("keeps demo what-if calculations hypothetical and demo returns explicitly unavailable", async () => {
+    const accountsBefore = await demoAdapter({ url: "/accounts", method: "get" });
+    const scenario = await demoAdapter({
+      url: "/planning/scenario",
+      method: "post",
+      data: JSON.stringify({
+        purchase_price: 500000, down_payment: 200000, loan_amount: 300000,
+        annual_interest_rate: 0, loan_term_months: 100,
+        monthly_rent: 10000, rent_delay_months: 2, monthly_net_surplus: 5000,
+      }),
+    });
+    const accountsAfter = await demoAdapter({ url: "/accounts", method: "get" });
+    const performance = await demoAdapter({ url: "/investments/investment-mf/performance", method: "get" });
+
+    expect(scenario.data.status).toBe("HYPOTHETICAL");
+    expect(scenario.data.scenario[0].balance).toBeLessThan(scenario.data.starting_cash);
+    expect(accountsAfter.data).toEqual(accountsBefore.data);
+    expect(performance.data.status).toBe("UNAVAILABLE");
+    expect(performance.data.xirr).toBeNull();
+  });
+
   it("renders every registered finance route with usable page content", async () => {
     await act(async () => {
       root.render(<App />);
@@ -60,7 +82,7 @@ describe("application route smoke test", () => {
       });
 
       const main = host.querySelector("main.app-main");
-      expect(main).toBeTruthy();
+      if (!main) throw new Error(`Expected the layout to render for ${route}`);
       expect(main.querySelector("h1, h2")).toBeTruthy();
       expect(main.textContent).not.toContain("This screen needs a refresh");
     }

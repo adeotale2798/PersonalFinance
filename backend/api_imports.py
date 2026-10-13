@@ -15,8 +15,9 @@ class CommitImportRequest(BaseModel):
     row_numbers: list[int] = Field(min_length=1)
     owner: str = Field(default="Self", min_length=1, max_length=120)
     occurred_on: str | None = None
+    account_id: str | None = None
 
-DATE_FIELDS = ("date", "transaction_date", "trade_date", "occurred_on", "date_time")
+DATE_FIELDS = ("date", "transaction_date", "trade_date", "occurred_on", "date_time", "value_date", "posting_date")
 PNL_FIELDS = ("realized_pnl", "realised_pnl", "realized_p&l", "realised_p&l", "p&l", "pnl", "profit_loss")
 
 
@@ -58,6 +59,27 @@ def classify_row(row):
     isin = str(clean.get("isin") or "").strip()
     if pnl is not None or "p&l" in text or "profit" in text or "loss" in text:
         return {"kind":"HISTORICAL_PNL", "confidence":.91, "name":str(name), "isin":isin, "amount":pnl or 0, "reason":"Recognised a realised P&L field; it will not be treated as a current holding."}
+    transaction_date = next((clean.get(key) for key in DATE_FIELDS if clean.get(key) not in (None, "")), None)
+    description = next((clean.get(key) for key in ("description", "narration", "particulars", "details", "transaction_description", "transaction_details", "remarks") if clean.get(key) not in (None, "")), None)
+    amount_value = next((clean.get(key) for key in ("transaction_amount", "amount", "withdrawal", "withdrawals", "deposit", "deposits") if clean.get(key) not in (None, "")), None)
+    debit = next((clean.get(key) for key in ("debit", "debit_amount", "withdrawal_amount", "withdrawals", "dr") if clean.get(key) not in (None, "")), None)
+    credit = next((clean.get(key) for key in ("credit", "credit_amount", "deposit_amount", "deposits", "cr") if clean.get(key) not in (None, "")), None)
+    if transaction_date and description and (amount_value is not None or debit is not None or credit is not None):
+        if any(token in str(description).lower() for token in ("transfer", "neft", "imps", "rtgs", "sweep")):
+            return {
+                "kind": "NEEDS_GUIDANCE",
+                "confidence": .70,
+                "name": str(description).strip(),
+                "reason": "Possible transfer; review both accounts and record it as a transfer so it does not inflate income or spending.",
+            }
+        return {
+            "kind": "BANK_TRANSACTION",
+            "confidence": .90,
+            "name": str(description).strip(),
+            "amount": 0,
+            "statement_balance": next((clean.get(key) for key in ("balance", "closing_balance", "running_balance") if clean.get(key) not in (None, "")), None),
+            "reason": "Recognised a dated bank statement transaction; review its account, direction, amount and projected balance.",
+        }
     if name and (quantity or value or cost):
         return {"kind":"HOLDING", "confidence":.86, "name":str(name), "isin":isin, "quantity":quantity, "current_value":value or cost, "cost":cost or value, "reason":"Recognised an instrument with holding, quantity, cost or valuation fields."}
     return {"kind":"NEEDS_GUIDANCE", "confidence":.35, "name":str(name), "isin":isin, "reason":"No safe financial interpretation was found. Choose a mapping in Review Inbox."}
@@ -82,6 +104,49 @@ def _preview_candidate(source, candidate):
             amount = float(str(raw_pnl).replace(",", "").replace("₹", "").strip())
             if not math.isfinite(amount): raise ValueError("non-finite amount")
         except (TypeError, ValueError): errors.append("P&L amount is not a valid number.")
+    if candidate["kind"] == "BANK_TRANSACTION":
+        if not any(clean.get(key) not in (None, "") for key in DATE_FIELDS):
+            errors.append("Bank transaction date is required.")
+        if not str(candidate.get("name") or "").strip():
+            errors.append("Bank transaction description is required.")
+        debit_raw = next((clean.get(key) for key in ("debit", "debit_amount", "withdrawal_amount", "withdrawals", "dr") if clean.get(key) not in (None, "")), None)
+        credit_raw = next((clean.get(key) for key in ("credit", "credit_amount", "deposit_amount", "deposits", "cr") if clean.get(key) not in (None, "")), None)
+        amount_raw = next((clean.get(key) for key in ("transaction_amount", "amount", "withdrawal", "withdrawals", "deposit", "deposits") if clean.get(key) not in (None, "")), None)
+        try:
+            if debit_raw is not None or credit_raw is not None:
+                debit_amount = float(str(debit_raw or "0").replace(",", "").replace("₹", "").strip())
+                credit_amount = float(str(credit_raw or "0").replace(",", "").replace("₹", "").strip())
+                if not math.isfinite(debit_amount) or not math.isfinite(credit_amount) or debit_amount < 0 or credit_amount < 0 or (debit_amount and credit_amount):
+                    raise ValueError("ambiguous debit/credit")
+                if debit_amount == 0 and credit_amount == 0:
+                    raise ValueError("zero amount")
+                signed_amount = credit_amount - debit_amount
+            elif amount_raw is not None:
+                amount = float(str(amount_raw).replace(",", "").replace("₹", "").strip())
+                if not math.isfinite(amount) or amount == 0:
+                    raise ValueError("invalid amount")
+                direction = str(clean.get("type") or clean.get("dr_cr") or clean.get("cr_dr") or clean.get("debit_credit") or clean.get("transaction_type") or "").strip().upper()
+                if amount > 0 and direction in {"DR", "DEBIT", "WITHDRAWAL", "DEBITED"}:
+                    amount *= -1
+                elif amount > 0 and direction and direction not in {"CR", "CREDIT", "DEPOSIT", "CREDITED", "INCOME"}:
+                    raise ValueError("unknown direction")
+                elif amount > 0 and not direction:
+                    raise ValueError("missing direction")
+                signed_amount = amount
+            else:
+                raise ValueError("missing amount")
+            candidate["amount"] = round2(signed_amount)
+        except (TypeError, ValueError):
+            errors.append("Bank transaction needs one unambiguous, non-zero debit or credit amount.")
+        raw_balance = candidate.get("statement_balance")
+        if raw_balance not in (None, ""):
+            try:
+                statement_balance = float(str(raw_balance).replace(",", "").replace("₹", "").strip())
+                if not math.isfinite(statement_balance):
+                    raise ValueError("non-finite balance")
+                candidate["statement_balance"] = round2(statement_balance)
+            except (TypeError, ValueError):
+                errors.append("Statement balance is not a valid number.")
     raw_date = next((clean.get(key) for key in DATE_FIELDS if clean.get(key) not in (None, "")), None)
     occurred_on = _date_value(raw_date)
     if raw_date is not None and occurred_on is None:
@@ -92,12 +157,17 @@ def _preview_candidate(source, candidate):
     candidate["planned_change"] = {
         "HOLDING": "Create or update this investment holding",
         "HISTORICAL_PNL": "Add a posted historical Investment P&L transaction",
+        "BANK_TRANSACTION": "Add a posted account transaction and update the projected ledger balance",
     }.get(candidate["kind"], "No change until the row is mapped")
     return candidate
 
 
 async def _likely_existing_transaction(candidate):
     """Flag exact title/type/amount matches without silently treating them as duplicates."""
+    if candidate.get("kind") == "BANK_TRANSACTION":
+        # The target account is chosen after preview; duplicate matching must be
+        # scoped to that account at commit to avoid cross-account false positives.
+        return None
     if candidate.get("kind") != "HISTORICAL_PNL":
         return None
     amount = abs(round2(candidate.get("amount", 0)))
@@ -122,7 +192,7 @@ def _candidate_fingerprint(provider, candidate):
         candidate.get("quantity", candidate.get("amount", 0)),
         candidate.get("current_value", candidate.get("amount", 0)),
     ]
-    if candidate["kind"] == "HISTORICAL_PNL":
+    if candidate["kind"] in {"HISTORICAL_PNL", "BANK_TRANSACTION"}:
         parts.append(candidate.get("occurred_on", ""))
     return fingerprint(*parts)
 
@@ -185,6 +255,42 @@ async def _commit_row(row, run, request, session=None):
     if kind == "NEEDS_GUIDANCE": return "NEEDS_GUIDANCE"
     if row.get("status") == "DUPLICATE" or candidate.get("duplicate"): return "DUPLICATE"
     if candidate.get("errors"): raise ValueError(f"Row {row['row_number']} has preview errors and cannot be applied")
+    if kind == "BANK_TRANSACTION":
+        amount = round2(candidate["amount"])
+        transaction = {
+            "type": "INCOME" if amount > 0 else "EXPENSE",
+            "amount": abs(amount),
+            "account_id": request.account_id,
+            "title": candidate["name"],
+            "description": candidate["name"],
+            "category": "Uncategorized",
+            "source": run["provider"],
+            "date": candidate["occurred_on"],
+            "scope": "PERSONAL",
+            "transaction_status": "POSTED",
+            "record_source": "IMPORT",
+            "source_import_id": str(run["_id"]),
+            "source_document": run["filename"],
+            "source_row": row["row_number"],
+            "statement_balance": candidate.get("statement_balance"),
+            "created_at": now_utc(),
+            "created_by": run["created_by"],
+        }
+        result = await db.transactions.insert_one(transaction, session=session)
+        saved = await db.transactions.find_one({"_id": result.inserted_id}, session=session)
+        await db.import_rows.update_one(
+            {"_id": row["_id"]},
+            {"$set": {
+                "status": "COMMITTED",
+                "committed_at": now_utc(),
+                "outcome": "CREATED",
+                "undo_record": {"version": 1, "documents": [
+                    {"collection": "transactions", "id": result.inserted_id, "before": None, "after": copy.deepcopy(saved)}
+                ]},
+            }},
+            session=session,
+        )
+        return "CREATED"
     owner = request.owner.strip(); occurrence = request.occurred_on or candidate.get("occurred_on") or now_utc().date().isoformat()
     entity_key = normalized_key("investment", candidate["name"], owner, "Equity")
     previous_entity = await db.financial_entities.find_one({"identity_key":entity_key}, session=session)
@@ -245,6 +351,38 @@ async def commit_import(run_id: str, request: CommitImportRequest, user: dict = 
     rows.sort(key=lambda row: row["row_number"])
     if any(row.get("candidate", {}).get("errors") for row in rows):
         raise HTTPException(status_code=400, detail="Selected rows contain preview errors. Correct or exclude those rows before applying the import.")
+    bank_rows = [row for row in rows if row.get("candidate", {}).get("kind") == "BANK_TRANSACTION"]
+    bank_rows_in_run = await db.import_rows.find({
+        "run_id": run_id,
+        "candidate.kind": "BANK_TRANSACTION",
+    }).to_list(3000)
+    account = None
+    if bank_rows:
+        if not request.account_id:
+            raise HTTPException(status_code=422, detail="Choose the account for the selected bank statement transactions.")
+        try:
+            account_oid = ObjectId(request.account_id)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="Choose a valid account.") from exc
+        account = await db.accounts.find_one({"_id": account_oid, "deleted_at": {"$exists": False}})
+        if not account:
+            raise HTTPException(status_code=404, detail="The selected account was not found.")
+        for row in bank_rows:
+            candidate = row["candidate"]
+            txn_type = "INCOME" if candidate["amount"] > 0 else "EXPENSE"
+            duplicate = await db.transactions.find_one({
+                "account_id": request.account_id,
+                "type": txn_type,
+                "date": candidate["occurred_on"],
+                "amount": abs(round2(candidate["amount"])),
+                "description": {"$regex": f"^{re.escape(candidate['name'])}$", "$options": "i"},
+                "deleted_at": {"$exists": False},
+            })
+            if duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Statement row {row['row_number']} matches an existing transaction in this account. Exclude it or review the existing record.",
+                )
     summary={"created":0,"consolidated":0,"duplicates":0,"needs_guidance":0}; keys={"CREATED":"created","CONSOLIDATED":"consolidated","DUPLICATE":"duplicates","NEEDS_GUIDANCE":"needs_guidance"}
     try:
         async with await _client.start_session() as session:
@@ -253,6 +391,36 @@ async def commit_import(run_id: str, request: CommitImportRequest, user: dict = 
     except Exception as exc:
         if not _transaction_unavailable(exc): raise
         for row in rows: summary[keys[await _commit_row(row,run,request)]]+=1
+    if bank_rows and account:
+        from api_finance import compute_account_balances
+        account_before = await db.accounts.find_one({"_id": account["_id"]})
+        balances, _ = await compute_account_balances()
+        statement_rows = [row for row in bank_rows if row["candidate"].get("statement_balance") is not None]
+        last_statement_row = max(statement_rows, key=lambda row: row["row_number"], default=None)
+        account_update = {"balance_source": "IMPORT", "updated_at": now_utc()}
+        if last_statement_row and len(bank_rows) == len(bank_rows_in_run):
+            ledger_balance = round2(balances.get(request.account_id, account.get("opening_balance", 0)))
+            statement_balance = round2(last_statement_row["candidate"]["statement_balance"])
+            difference = round2(ledger_balance - statement_balance)
+            account_update.update({
+                "statement_balance": statement_balance,
+                "ledger_balance_at_reconcile": ledger_balance,
+                "reconciliation_difference": difference,
+                "reconciliation_as_of": last_statement_row["candidate"]["occurred_on"],
+                "reconciliation_status": "MATCHED" if abs(difference) <= 0.01 else "VARIANCE",
+            })
+            if abs(difference) <= 0.01:
+                account_update["last_reconciled_at"] = now_utc()
+        await db.accounts.update_one({"_id": account["_id"]}, {"$set": account_update})
+        account_after = await db.accounts.find_one({"_id": account["_id"]})
+        await db.import_runs.update_one({"_id": object_id}, {"$set": {
+            "account_undo_record": {
+                "collection": "accounts",
+                "id": account["_id"],
+                "before": account_before,
+                "after": account_after,
+            },
+        }})
     await db.import_runs.update_one({"_id":object_id},{"$set":{"status":"COMMITTED","committed_at":now_utc(),"committed_by":user["email"],"summary":summary}})
     return {"run_id":run_id,"summary":summary}
 
@@ -346,6 +514,12 @@ async def undo_import(run_id: str, user: dict = Depends(require_admin)):
             else:
                 failures.append({"row_number":row["row_number"],"error":str(exc)})
                 await db.import_rows.update_one({"_id":row["_id"]},{"$set":{"status":"UNDO_FAILED","undo_error":str(exc)}})
+    account_undo_record = run.get("account_undo_record")
+    if account_undo_record and not failures:
+        try:
+            await _undo_document(account_undo_record)
+        except Exception as exc:
+            failures.append({"row_number": 0, "error": str(exc)})
     status = "UNDO_PARTIAL" if failures else "UNDONE"
     await db.import_runs.update_one({"_id":object_id},{"$set":{
         "status":status,"undo_status":status,"undone_at":now_utc(),"undone_by":user["email"],

@@ -1,5 +1,7 @@
 """Wealth: savings, PF/PPF, assets, liabilities, investments, net worth."""
 from collections import defaultdict
+from datetime import date
+import math
 from fastapi import APIRouter, Depends, HTTPException
 from core import db, serialize, oid, now_utc, require_admin, round2, normalize_date, validate_financial_payload, log_audit
 from api_finance import compute_account_balances
@@ -51,6 +53,19 @@ def _position(
     ownership = record.get("ownership_percent")
     ownership = 100 if ownership is None else round2(ownership)
     gross_value = round2(value)
+    source = record.get("valuation_source") or record.get("balance_source") or record.get("record_source") or (
+        "IMPORT" if record.get("source_document") or record.get("source_import_id") else None
+    ) or source_default or "Not recorded"
+    as_of = str(record.get("valuation_date") or record.get("last_reconciled_at") or "")[:10] or None
+    try:
+        age_days = (now_utc().date() - date.fromisoformat(as_of)).days if as_of else None
+    except ValueError:
+        age_days = None
+    confidence = (
+        "ESTIMATE" if str(source).strip().lower() in {"manual", "manual estimate", "estimate"}
+        else "INCOMPLETE" if source == "Not recorded" or age_days is None
+        else "RECORDED"
+    )
     return {
         "id": str(record.get("id") or record.get("_id") or ""),
         "name": record.get("name") or record.get("institution") or record.get("policy_name") or record.get("counterparty") or category,
@@ -60,8 +75,11 @@ def _position(
         "ownership_percent": ownership,
         "gross_value": abs(gross_value),
         "owned_value": round2(abs(gross_value) * ownership / 100),
-        "source": record.get("valuation_source") or record.get("balance_source") or record.get("record_source") or source_default or "Not recorded",
-        "as_of": str(record.get("valuation_date") or record.get("last_reconciled_at") or "")[:10] or None,
+        "source": source,
+        "as_of": as_of,
+        "age_days": age_days,
+        "confidence": confidence,
+        "last_updated": record.get("updated_at") or record.get("created_at"),
     }
 
 
@@ -234,6 +252,127 @@ async def record_investment_valuation(item_id: str, payload: dict, user: dict = 
     return {**serialize({**record, "_id": result.inserted_id}), "current_position_updated": is_current}
 
 
+def _xnpv(rate, cashflows, start_date):
+    total = 0.0
+    log_base = math.log1p(rate)
+    for flow_date, amount in cashflows:
+        exponent = ((flow_date - start_date).days / 365.0) * log_base
+        if exponent > 700:
+            continue
+        if exponent < -700:
+            return math.copysign(math.inf, amount)
+        total += amount / math.exp(exponent)
+    return total
+
+
+def _xirr(cashflows):
+    cashflows = sorted(cashflows, key=lambda item: item[0])
+    if len({flow_date for flow_date, _ in cashflows}) < 2:
+        return None, "Dated cash flows on at least two different dates are required."
+    if not any(amount < 0 for _, amount in cashflows) or not any(amount > 0 for _, amount in cashflows):
+        return None, "Both invested cash and proceeds or a current valuation are required."
+    signs = [1 if amount > 0 else -1 for _, amount in cashflows if amount]
+    if sum(left != right for left, right in zip(signs, signs[1:])) > 1:
+        return None, "The cash-flow sequence changes direction multiple times; no single XIRR is reported."
+
+    start_date = cashflows[0][0]
+    # Search a bounded, logarithmically spaced rate range; multiple roots are
+    # reported as ambiguous rather than presenting an arbitrary annual return.
+    rates = [-0.9999]
+    rates.extend((10 ** (index / 20) - 1) for index in range(-40, 61))
+    brackets = []
+    previous_rate = rates[0]
+    previous_value = _xnpv(previous_rate, cashflows, start_date)
+    for rate in rates[1:]:
+        value = _xnpv(rate, cashflows, start_date)
+        if math.isfinite(value) and abs(value) < 0.000001:
+            return rate, None
+        if math.isfinite(value) and math.isfinite(previous_value) and value * previous_value < 0:
+            brackets.append((previous_rate, rate))
+        previous_rate, previous_value = rate, value
+    if not brackets:
+        return None, "The recorded cash flows do not produce a stable annualized return."
+    if len(brackets) > 1:
+        return None, "The recorded cash flows have multiple possible returns; no single XIRR is reported."
+    low, high = brackets[0]
+    low_value = _xnpv(low, cashflows, start_date)
+    for _ in range(160):
+        mid = (low + high) / 2
+        mid_value = _xnpv(mid, cashflows, start_date)
+        if abs(mid_value) < 0.000001:
+            return mid, None
+        if low_value * mid_value <= 0:
+            high = mid
+        else:
+            low, low_value = mid, mid_value
+    return (low + high) / 2, None
+
+
+@router.get("/investments/{item_id}/performance")
+async def investment_performance(item_id: str, user: dict = Depends(require_admin)):
+    investment = await inv_coll.find_one({"_id": oid(item_id), "deleted_at": {"$exists": False}})
+    if not investment:
+        raise HTTPException(status_code=404, detail="Investment not found")
+    activities = await db.investment_activities.find({"investment_id": item_id}).to_list(2000)
+    valuations = await db.investment_valuations.find({"investment_id": item_id}).sort(
+        [("date", -1), ("created_at", -1)]
+    ).to_list(2000)
+    latest = valuations[0] if valuations else None
+    valuation_date = (latest or {}).get("date") or investment.get("valuation_date")
+    current_value = (latest or {}).get("current_value", investment.get("current_value"))
+    if not valuation_date or current_value is None:
+        return {
+            "status": "UNAVAILABLE",
+            "xirr": None,
+            "reason": "A dated current valuation is required before investment return can be calculated.",
+            "cash_flow_count": len(activities),
+        }
+    try:
+        terminal_date = date.fromisoformat(valuation_date)
+    except ValueError:
+        return {"status": "UNAVAILABLE", "xirr": None, "reason": "The current valuation date is invalid.", "cash_flow_count": len(activities)}
+
+    cashflows = []
+    for activity in activities:
+        try:
+            activity_date = date.fromisoformat(str(activity.get("date") or ""))
+        except ValueError:
+            continue
+        if activity_date > terminal_date:
+            return {
+                "status": "UNAVAILABLE",
+                "xirr": None,
+                "reason": "The current valuation predates recorded investment activity; enter a valuation dated on or after the latest activity.",
+                "cash_flow_count": len(activities),
+                "valuation_date": terminal_date.isoformat(),
+            }
+        amount = abs(round2(activity.get("amount", 0)))
+        activity_type = activity.get("type")
+        signed_amount = -amount if activity_type in {"CONTRIBUTION", "FEE"} else amount
+        cashflows.append((activity_date, signed_amount))
+    cashflows.append((terminal_date, abs(round2(current_value))))
+    value, reason = _xirr(cashflows)
+    if reason:
+        return {
+            "status": "UNAVAILABLE",
+            "xirr": None,
+            "reason": reason,
+            "cash_flow_count": len(cashflows) - 1,
+            "valuation_date": terminal_date.isoformat(),
+            "valuation_source": (latest or {}).get("source") or investment.get("valuation_source") or "Not recorded",
+        }
+    return {
+        "status": "AVAILABLE",
+        "method": "XIRR",
+        "xirr": round(value * 100, 4),
+        "annualized": True,
+        "cash_flow_count": len(cashflows) - 1,
+        "valuation_date": terminal_date.isoformat(),
+        "valuation_source": (latest or {}).get("source") or investment.get("valuation_source") or "Not recorded",
+        "assumptions": "Contributions and fees are investor outflows; sale proceeds, distributions, and the latest recorded market value are inflows. Uses actual calendar days/365.",
+    }
+
+
 @router.get("/networth")
 async def net_worth(user: dict = Depends(require_admin)):
     data = await networth_data()
@@ -270,6 +409,15 @@ async def networth_data():
     balances, accts = await compute_account_balances()
     positions = []
     account_by_id = {str(account["_id"]): account for account in accts}
+    activity_rows = await db.transactions.find({
+        "deleted_at": {"$exists": False},
+        "transaction_status": {"$nin": ["PENDING", "VOID"]},
+    }).sort([("date", -1)]).to_list(50000)
+    latest_account_activity = {}
+    for transaction in activity_rows:
+        for account_id in (transaction.get("account_id"), transaction.get("to_account_id")):
+            if account_id and account_id not in latest_account_activity:
+                latest_account_activity[account_id] = transaction.get("date")
     for account_id, balance in balances.items():
         account = account_by_id.get(account_id)
         if not account:
@@ -282,7 +430,13 @@ async def networth_data():
             side="liability" if balance < 0 else "asset",
             source_default="Live ledger",
         )
-        position["as_of"] = str(account.get("last_reconciled_at") or "")[:10] or None
+        position["as_of"] = str(
+            account.get("last_reconciled_at")
+            or latest_account_activity.get(account_id)
+            or account.get("updated_at")
+            or account.get("created_at")
+            or ""
+        )[:10] or None
         positions.append(position)
 
     collections = (

@@ -3,13 +3,20 @@ import { AlertTriangle, Bot, CheckCircle2, FileUp, ShieldCheck, Undo2 } from "lu
 import { Badge, Button, Card, Field, PageHeader, Select } from "../components/ui";
 import api, { apiError } from "../lib/api";
 import { inr } from "../lib/format";
+import { useFetch } from "../lib/useFetch";
 
 export default function SmartImport() {
   const input = useRef();
-  const [review, setReview] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(""), [owner, setOwner] = useState("Self"), [selected, setSelected] = useState(new Set()), [undoResult, setUndoResult] = useState(null);
+  const [review, setReview] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(""), [owner, setOwner] = useState("Self"), [selected, setSelected] = useState(new Set()), [undoResult, setUndoResult] = useState(null), [accountId, setAccountId] = useState("");
+  const accounts = useFetch("/accounts");
+  const selectedBankRows = (review?.candidates || []).filter((row) => selected.has(row.row_number) && row.kind === "BANK_TRANSACTION");
+  const selectedMovement = selectedBankRows.reduce((total, row) => total + Number(row.amount || 0), 0);
+  const selectedAccount = (accounts.data || []).find((account) => account.id === accountId);
+  const projectedBalance = selectedAccount ? Number(selectedAccount.current_balance || 0) + selectedMovement : null;
+  const lastStatementBalance = selectedBankRows.slice().reverse().find((row) => row.statement_balance != null)?.statement_balance;
   const analyze = async (file) => {
     if (!file) return;
-    setBusy(true); setError(""); setUndoResult(null);
+    setBusy(true); setError(""); setUndoResult(null); setAccountId("");
     try {
       const body = new FormData();
       body.append("file", file);
@@ -21,10 +28,18 @@ export default function SmartImport() {
     finally { setBusy(false); }
   };
   const commit = async () => {
+    if (selectedBankRows.length && !accountId) {
+      setError("Select the account that owns the statement before applying these rows.");
+      return;
+    }
+    if (selectedBankRows.length && !window.confirm(
+      `Apply ${selectedBankRows.length} statement transaction(s) to ${selectedAccount?.name}? The ledger balance will change by ${inr(selectedMovement)}.`
+    )) return;
     setBusy(true); setError("");
     try {
-      const { data } = await api.post(`/imports/${review.run_id}/commit`, { row_numbers: [...selected], owner });
+      const { data } = await api.post(`/imports/${review.run_id}/commit`, { row_numbers: [...selected], owner, account_id: accountId || undefined });
       setReview({ ...review, committed: { ...data.summary, status: data.status || "COMMITTED" } });
+      if (selectedBankRows.length) await accounts.refetch(true);
     } catch (e) { setError(apiError(e)); }
     finally { setBusy(false); }
   };
@@ -40,9 +55,10 @@ export default function SmartImport() {
   };
   const toggle = (row) => setSelected((current) => { const next = new Set(current); next.has(row) ? next.delete(row) : next.add(row); return next; });
   const canUndo = review?.committed && ["COMMITTED", "UNDO_PARTIAL"].includes(review.committed.status);
+  const hasBankRows = (review?.candidates || []).some((row) => row.kind === "BANK_TRANSACTION");
   return <>
     <PageHeader title="Import Center" subtitle="Analyze, review, reconcile and approve financial documents without silently changing your records." icon={Bot}/>
-    <Card className="p-6 mb-6 bg-gradient-to-br from-teal-50 to-white">
+    <Card className="p-6 mb-6 bg-teal-50/60">
       <div className="flex flex-col sm:flex-row gap-5 items-start sm:items-center justify-between">
         <div><h2 className="font-display font-bold text-ink">Bring a broker export into Nivara</h2><p className="text-sm text-subink mt-1">Every approved row retains its source document, row number, classifier confidence and duplicate fingerprint.</p></div>
         <Button onClick={() => input.current?.click()} disabled={busy}><FileUp size={16}/>{busy ? "Working…" : "Choose CSV or Excel"}</Button>
@@ -83,7 +99,21 @@ export default function SmartImport() {
               </div>}
         </div>
         {review.notice && <p className="px-5 py-3 text-xs text-subink bg-muted/30">{review.notice}</p>}
-        <div className="overflow-x-auto"><table className="w-full text-sm">
+          {hasBankRows && <div className="border-b border-line p-5">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Statement account"><Select value={accountId} onChange={(event) => setAccountId(event.target.value)} disabled={!!review.committed}>
+                <option value="">Choose an account</option>
+                {(accounts.data || []).map((account) => <option key={account.id} value={account.id}>{account.name} · {inr(account.current_balance || 0)}</option>)}
+              </Select></Field>
+              <div className="rounded-lg bg-muted/60 p-3 text-sm">
+                <p className="text-xs text-subink">Selected statement rows · projected balance</p>
+                <p className="mt-1 font-semibold text-ink">{selectedAccount ? `${inr(selectedAccount.current_balance || 0)} ${selectedMovement < 0 ? "−" : "+"} ${inr(Math.abs(selectedMovement))} = ${inr(projectedBalance)}` : "Select an account to calculate the projected balance."}</p>
+                {lastStatementBalance != null && <p className="mt-1 text-xs text-subink">Last selected statement balance: {inr(lastStatementBalance)}{selectedAccount ? ` · difference ${inr(projectedBalance - Number(lastStatementBalance))}` : ""}. A mismatch is recorded for review; no balance is silently adjusted.</p>}
+              </div>
+            </div>
+            <p className="mt-3 text-[11px] text-subink">Rows are previews only until you approve them. Imported transactions move the ledger; they do not overwrite the opening balance. The comparison uses the current ledger balance as its starting point, so exclude any rows already recorded.</p>
+          </div>}
+          <div className="overflow-x-auto"><table className="w-full text-sm">
           <thead className="bg-muted/60 overline text-faint"><tr><th className="p-3 text-left">Apply</th><th className="p-3 text-left">Detected</th><th className="p-3 text-left">Record</th><th className="p-3 text-right">Value / P&L</th><th className="p-3 text-left">Preview change / issues</th></tr></thead>
           <tbody>{review.candidates.map((row) => {
             const disabled = !!review.committed || !row.can_apply || row.kind === "NEEDS_GUIDANCE" || row.duplicate;
@@ -91,7 +121,7 @@ export default function SmartImport() {
               <td className="p-3"><input aria-label={`Apply row ${row.row_number}`} type="checkbox" disabled={disabled} checked={selected.has(row.row_number)} onChange={() => toggle(row.row_number)}/></td>
               <td className="p-3"><Badge tone={row.duplicate || row.kind === "NEEDS_GUIDANCE" || row.errors?.length ? "amber" : row.kind === "HISTORICAL_PNL" ? "blue" : "green"}>{row.duplicate ? "Likely duplicate" : row.errors?.length ? "Has errors" : row.kind.replace("_", " ")}</Badge></td>
               <td className="p-3 font-medium text-ink">{row.name}</td>
-              <td className="p-3 text-right num">{inr(row.amount ?? row.current_value)}</td>
+              <td className="p-3 text-right num">{inr(row.amount ?? row.current_value)}{row.kind === "BANK_TRANSACTION" && <span className="block text-[10px] text-faint">{row.amount >= 0 ? "Credit" : "Debit"}{row.statement_balance != null ? ` · balance ${inr(row.statement_balance)}` : ""}</span>}</td>
               <td className="p-3 text-xs text-subink">
                 <span>{row.planned_change || row.reason} · {Math.round(row.confidence * 100)}% confidence</span>
                 {row.duplicate_reason && <p className="mt-1 text-amber-700"><AlertTriangle size={12} className="inline mr-1"/>{row.duplicate_reason}</p>}
