@@ -6,7 +6,7 @@ import { PageHeader, StateBlock, Badge, DetailDrawer, Button, Modal, Field, Inpu
 import KpiCard from "../components/KpiCard";
 import { ChartCard, Donut, TrendLine } from "../components/charts";
 import CrudManager from "../components/CrudManager";
-import { inr, todayISO } from "../lib/format";
+import { fmtDate, inr, todayISO } from "../lib/format";
 import api, { apiError } from "../lib/api";
 
 export default function Savings() {
@@ -14,6 +14,7 @@ export default function Savings() {
   const [selectedInvestment, setSelectedInvestment] = useState(null);
   const [investmentActivity, setInvestmentActivity] = useState([]);
   const [investmentValuations, setInvestmentValuations] = useState([]);
+  const [investmentPerformance, setInvestmentPerformance] = useState(null);
   const [entryMode, setEntryMode] = useState("");
   const [entryType, setEntryType] = useState("CONTRIBUTION");
   const [entryAmount, setEntryAmount] = useState("");
@@ -34,16 +35,19 @@ export default function Savings() {
     if (!selectedInvestment) {
       setInvestmentActivity([]);
       setInvestmentValuations([]);
+      setInvestmentPerformance(null);
       return undefined;
     }
     let active = true;
     Promise.all([
       api.get(`/investments/${selectedInvestment.id}/activity`),
       api.get(`/investments/${selectedInvestment.id}/valuations`),
-    ]).then(([activity, valuations]) => {
+      api.get(`/investments/${selectedInvestment.id}/performance`),
+    ]).then(([activity, valuations, performance]) => {
       if (active) {
         setInvestmentActivity(activity.data);
         setInvestmentValuations(valuations.data);
+        setInvestmentPerformance(performance.data);
       }
     }).catch((error) => {
       if (active) setEntryError(apiError(error));
@@ -129,6 +133,8 @@ export default function Savings() {
       ]);
       setInvestmentActivity(activity.data);
       setInvestmentValuations(valuations.data);
+      const { data: performance } = await api.get(`/investments/${selectedInvestment.id}/performance`);
+      setInvestmentPerformance(performance);
       await invSummary.refetch(true);
       setEntryMode("");
     } catch (error) {
@@ -171,6 +177,12 @@ export default function Savings() {
         </div>
         <p className="mt-4 text-xs text-subink">Value as of {selectedInvestment?.valuation_date || "date not recorded"} · {selectedInvestment?.valuation_source || "source not recorded"}</p>
         <p className="mt-2 text-xs text-subink">Change versus recorded cost is not an annualized or time-weighted return. Returns require complete dated cash flows and valuations.</p>
+        <div className="mt-4 rounded-lg bg-muted/60 p-3">
+          <div className="overline text-faint">Annualized investment return · XIRR</div>
+          {investmentPerformance?.status === "AVAILABLE"
+            ? <><p className="num mt-1 text-lg font-bold text-ink">{investmentPerformance.xirr}%</p><p className="mt-1 text-xs text-subink">{investmentPerformance.cash_flow_count} dated activity record(s) · value as of {fmtDate(investmentPerformance.valuation_date)} · {investmentPerformance.valuation_source}</p><p className="mt-1 text-[11px] text-faint">{investmentPerformance.assumptions}</p></>
+            : <p className="mt-1 text-xs text-subink">{investmentPerformance?.reason || "Checking whether dated cash flows and valuations support a return calculation…"}</p>}
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button size="sm" onClick={() => openEntry("activity")}>Record activity</Button>
           <Button size="sm" variant="secondary" onClick={() => openEntry("valuation")}>Record valuation</Button>

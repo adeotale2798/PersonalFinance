@@ -577,6 +577,72 @@ def test_investment_activity_and_valuation_history_are_dated_and_audited(admin):
     assert admin.delete(f"/investments/{investment_id}").status_code == 200
 
 
+def test_bank_statement_import_previews_before_posting_and_reconciles_after_approval(admin):
+    account = admin.post("/accounts", json={
+        "name": f"E2E statement account {uuid4().hex[:6]}",
+        "type": "BANK",
+        "opening_balance": 1000,
+        "owner": "Self",
+    })
+    assert account.status_code == 200, account.text
+    account_id = account.json()["id"]
+    content = (
+        b"Date,Description,Debit,Credit,Balance\n"
+        b"2026-10-01,Household bill,100,,900\n"
+        b"2026-10-02,Salary,,250,1150\n"
+    )
+    preview = admin.post("/imports/analyze", files={
+        "file": ("bank-statement.csv", content, "text/csv"),
+    })
+    assert preview.status_code == 200, preview.text
+    review = preview.json()
+    assert review["preview"]["ready"] == 2
+    assert all(row["kind"] == "BANK_TRANSACTION" for row in review["candidates"])
+    assert next(row for row in admin.get("/accounts").json() if row["id"] == account_id)["current_balance"] == 1000
+
+    selected = [row["row_number"] for row in review["candidates"]]
+    missing_account = admin.post(f"/imports/{review['run_id']}/commit", json={"row_numbers": selected})
+    assert missing_account.status_code == 422
+    committed = admin.post(f"/imports/{review['run_id']}/commit", json={
+        "row_numbers": selected,
+        "account_id": account_id,
+    })
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["summary"]["created"] == 2
+    updated_account = next(row for row in admin.get("/accounts").json() if row["id"] == account_id)
+    assert updated_account["current_balance"] == 1150
+    assert updated_account["reconciliation_status"] == "MATCHED"
+    assert updated_account["statement_balance"] == 1150
+    undone = admin.post(f"/imports/{review['run_id']}/undo")
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["status"] == "UNDONE"
+    restored_account = next(row for row in admin.get("/accounts").json() if row["id"] == account_id)
+    assert restored_account["current_balance"] == 1000
+    assert restored_account["reconciliation_status"] == "NOT_RECONCILED"
+    mismatch_content = b"Date,Description,Debit,Credit,Balance\n2026-10-03,Utility bill,100,,999\n"
+    mismatch_preview = admin.post("/imports/analyze", files={
+        "file": ("bank-statement-mismatch.csv", mismatch_content, "text/csv"),
+    })
+    assert mismatch_preview.status_code == 200, mismatch_preview.text
+    mismatch_run = mismatch_preview.json()
+    mismatch_commit = admin.post(f"/imports/{mismatch_run['run_id']}/commit", json={
+        "row_numbers": [mismatch_run["candidates"][0]["row_number"]],
+        "account_id": account_id,
+    })
+    assert mismatch_commit.status_code == 200, mismatch_commit.text
+    mismatched_account = next(row for row in admin.get("/accounts").json() if row["id"] == account_id)
+    assert mismatched_account["current_balance"] == 900
+    assert mismatched_account["statement_balance"] == 999
+    assert mismatched_account["reconciliation_status"] == "VARIANCE"
+    assert admin.post(f"/imports/{mismatch_run['run_id']}/undo").json()["status"] == "UNDONE"
+    restored_account = next(row for row in admin.get("/accounts").json() if row["id"] == account_id)
+    assert restored_account["current_balance"] == 1000
+    assert restored_account["reconciliation_status"] == "NOT_RECONCILED"
+    assert admin.post("/imports/analyze", files={
+        "file": ("bank-statement.csv", content, "text/csv"),
+    }).json()["status"] == "ALREADY_IMPORTED"
+
+
 def test_operational_property_links_reuse_a_single_balance_sheet_asset(admin):
     property_before = admin.get("/networth").json()["breakdown"]["property"]
     asset = admin.post("/assets", json={

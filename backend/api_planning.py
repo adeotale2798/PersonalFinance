@@ -2,10 +2,32 @@
 from datetime import timedelta
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core import db, now_utc, require_admin, round2, serialize, oid, normalize_date
 from api_finance import compute_account_balances
 
 router = APIRouter(tags=["planning"])
+
+
+class ScenarioInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    purchase_price: float = Field(gt=0, le=1_000_000_000_000, allow_inf_nan=False)
+    down_payment: float = Field(default=0, ge=0, le=1_000_000_000_000, allow_inf_nan=False)
+    loan_amount: float = Field(default=0, ge=0, le=1_000_000_000_000, allow_inf_nan=False)
+    annual_interest_rate: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
+    loan_term_months: int = Field(default=240, ge=1, le=480)
+    monthly_rent: float = Field(default=0, ge=0, le=1_000_000_000, allow_inf_nan=False)
+    rent_delay_months: int = Field(default=0, ge=0, le=24)
+    monthly_net_surplus: float = Field(default=0, ge=-1_000_000_000, le=1_000_000_000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_financing(self):
+        if self.down_payment == 0 and self.loan_amount == 0:
+            return self
+        if abs(self.down_payment + self.loan_amount - self.purchase_price) > 0.01:
+            raise ValueError("Down payment and loan must add up to the purchase price")
+        return self
+
 
 def _event(title, due_date, amount=0, kind="REMINDER", path="/notifications", detail="", source_collection="", source_id=""):
     fingerprint = f"{kind}:{source_collection}:{source_id}:{due_date or ''}:{title}"
@@ -178,6 +200,59 @@ async def ownership_summary(user: dict = Depends(require_admin)):
         "owners": [{"name": owner, "value": round2(value)} for owner, value in sorted(buckets.items(), key=lambda row: -row[1])],
         "views": {key: round2(value) for key, value in groups.items()},
         "note": "Consolidated values use recorded asset and liability positions after ownership percentages. Link a property, farm or project to its canonical balance-sheet asset; operational values are not added separately, so linked records cannot inflate totals.",
+    }
+
+
+@router.post("/planning/scenario")
+async def planning_scenario(payload: ScenarioInput, user: dict = Depends(require_admin)):
+    """Model a hypothetical property purchase without creating ledger records."""
+    balances, _ = await compute_account_balances()
+    starting_cash = round2(sum(balances.values()))
+    loan = payload.loan_amount
+    monthly_rate = payload.annual_interest_rate / 1200
+    if loan <= 0:
+        monthly_payment = 0.0
+    elif monthly_rate == 0:
+        monthly_payment = loan / payload.loan_term_months
+    else:
+        monthly_payment = loan * monthly_rate / (1 - (1 + monthly_rate) ** -payload.loan_term_months)
+    monthly_payment = round2(monthly_payment)
+    immediate_cost = round2(payload.purchase_price - loan)
+    base_projection = []
+    scenario_projection = []
+    base_balance = starting_cash
+    scenario_balance = round2(starting_cash - immediate_cost)
+    min_balance = scenario_balance
+    min_month = 0
+    for month in range(13):
+        if month:
+            base_balance = round2(base_balance + payload.monthly_net_surplus)
+            scenario_balance = round2(scenario_balance + payload.monthly_net_surplus)
+            if month <= payload.loan_term_months:
+                scenario_balance = round2(scenario_balance - monthly_payment)
+            if month > payload.rent_delay_months:
+                scenario_balance = round2(scenario_balance + payload.monthly_rent)
+        base_projection.append({"month": month, "balance": base_balance})
+        scenario_projection.append({"month": month, "balance": scenario_balance})
+        if scenario_balance < min_balance:
+            min_balance, min_month = scenario_balance, month
+    return {
+        "status": "HYPOTHETICAL",
+        "starting_cash": starting_cash,
+        "immediate_cash_required": immediate_cost,
+        "estimated_monthly_payment": monthly_payment,
+        "minimum_projected_cash": min_balance,
+        "minimum_projected_cash_month": min_month,
+        "cash_remains_nonnegative": min_balance >= 0,
+        "baseline": base_projection,
+        "scenario": scenario_projection,
+        "assumptions": [
+            "No ledger, asset or liability records were created or changed.",
+            "Current account cash is the starting point; existing scheduled commitments are not included in this hypothetical.",
+            "Monthly net surplus, rent and financing terms are user-provided assumptions, not recorded or guaranteed amounts.",
+            "The purchase is immediate; loan payments begin in month 1; rent begins after the selected delay.",
+            "Taxes, purchase fees, maintenance, vacancy after rent starts, and changing interest rates are excluded.",
+        ],
     }
 
 

@@ -9,6 +9,7 @@ router = APIRouter(tags=["data quality"])
 STALE_IMPORT_DAYS = 30
 RECONCILIATION_DAYS = 90
 FINDING_LIMIT = 100
+VALUATION_STALE_DAYS = 365
 
 
 def _as_datetime(value):
@@ -53,6 +54,9 @@ async def data_quality_summary(user: dict = Depends(require_admin)):
         "reconciliation_variances": 0,
         "uncategorized_transactions": 0,
         "unassigned_transactions": 0,
+        "positions_missing_valuation_details": 0,
+        "estimated_valuations": 0,
+        "stale_valuations": 0,
     }
     for account in accounts:
         account_id = str(account["_id"])
@@ -84,7 +88,6 @@ async def data_quality_summary(user: dict = Depends(require_admin)):
                 "record_id": account_id,
                 "age_days": age,
             })
-
         if (account.get("balance_source") or "").upper() == "IMPORT":
             source_updated = latest_activity.get(account_id) or account.get("updated_at") or account.get("created_at")
             source_age = _age_days(source_updated, now)
@@ -101,10 +104,72 @@ async def data_quality_summary(user: dict = Depends(require_admin)):
                     "age_days": source_age,
                 })
 
+    position_sources = (
+        (db.savings, "current_value", "/savings", "savings"),
+        (db.pf_ppf, "current_balance", "/pf-ppf", "retirement"),
+        (db.investments, "current_value", "/savings", "investment"),
+        (db.assets, "current_value", "/net-worth", "asset"),
+        (db.liabilities, "outstanding", "/net-worth", "liability"),
+        (db.loans, "outstanding", "/loans", "loan"),
+    )
+    for collection, value_key, path, label in position_sources:
+        records = await collection.find({"deleted_at": {"$exists": False}}).to_list(2000)
+        for record in records:
+            source = (
+                record.get("valuation_source")
+                or record.get("balance_source")
+                or record.get("record_source")
+                or ("IMPORT" if record.get("source_document") or record.get("source_import_id") else None)
+            )
+            as_of = record.get("valuation_date")
+            record_id = str(record.get("_id", ""))
+            name = record.get("name") or record.get("institution") or record.get("policy_name") or label.title()
+            age = _age_days(as_of, now)
+            if not source or age is None:
+                counts["positions_missing_valuation_details"] += 1
+                missing = "source and date" if not source and age is None else "source" if not source else "valuation date"
+                findings.append({
+                    "id": f"valuation-details:{label}:{record_id}",
+                    "kind": "MISSING_VALUATION_DETAILS",
+                    "severity": "MEDIUM",
+                    "title": f"Missing {missing} · {name}",
+                    "detail": f"This {label} value needs a valuation source and date so its reliability and freshness are clear.",
+                    "path": path,
+                    "record_id": record_id,
+                })
+            if str(source or "").strip().lower() in {"manual", "manual estimate", "estimate"}:
+                counts["estimated_valuations"] += 1
+                findings.append({
+                    "id": f"estimated-valuation:{label}:{record_id}",
+                    "kind": "ESTIMATED_VALUATION",
+                    "severity": "LOW",
+                    "title": f"Estimated value · {name}",
+                    "detail": "This value is marked as a manual estimate, not a statement, market quote, or professional valuation.",
+                    "path": path,
+                    "record_id": record_id,
+                    "amount": record.get(value_key, 0),
+                })
+            if age is not None and age >= VALUATION_STALE_DAYS:
+                counts["stale_valuations"] += 1
+                findings.append({
+                    "id": f"stale-valuation:{label}:{record_id}",
+                    "kind": "STALE_VALUATION",
+                    "severity": "MEDIUM",
+                    "title": f"Value may be out of date · {name}",
+                    "detail": f"The recorded valuation is {age} days old. Review it before relying on current totals.",
+                    "path": path,
+                    "record_id": record_id,
+                    "age_days": age,
+                    "amount": record.get(value_key, 0),
+                })
+
     for txn in transactions:
         if txn.get("type") not in ("INCOME", "EXPENSE") or txn.get("transaction_status") == "VOID":
             continue
-        is_uncategorized = not (txn.get("category") if txn["type"] == "EXPENSE" else txn.get("source"))
+        classification = txn.get("category") if txn["type"] == "EXPENSE" else txn.get("source")
+        is_uncategorized = not classification or str(classification).strip().lower() in {
+            "uncategorized", "imported statement",
+        }
         if is_uncategorized:
             counts["uncategorized_transactions"] += 1
             findings.append({
@@ -139,6 +204,7 @@ async def data_quality_summary(user: dict = Depends(require_admin)):
         "thresholds": {
             "imported_balance_stale_days": STALE_IMPORT_DAYS,
             "reconciliation_due_days": RECONCILIATION_DAYS,
+            "valuation_stale_days": VALUATION_STALE_DAYS,
         },
         "counts": counts,
         "total_issues": total_issues,

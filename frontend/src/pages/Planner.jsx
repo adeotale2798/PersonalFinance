@@ -1,17 +1,42 @@
-import React from "react";
+import React, { useState } from "react";
 import { Activity, CalendarDays, Calculator, Download, Landmark, ShieldCheck, WalletCards } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { Badge, Button, Card, PageHeader, StateBlock } from "../components/ui";
+import { Badge, Button, Card, Field, Input, PageHeader, StateBlock } from "../components/ui";
 import { useFetch } from "../lib/useFetch";
 import { fmtDate, inr } from "../lib/format";
 import { downloadFinancialSnapshot } from "../lib/export";
 import ActionCenter from "../components/ActionCenter";
+import api, { apiError } from "../lib/api";
 
 export default function Planner() {
   const overview = useFetch("/planning/overview");
   const ownership = useFetch("/planning/ownership");
+  const [scenarioInputs, setScenarioInputs] = useState({
+    purchase_price: "", down_payment: "", loan_amount: "", annual_interest_rate: "",
+    loan_term_months: "240", monthly_rent: "", rent_delay_months: "0", monthly_net_surplus: "",
+  });
+  const [scenario, setScenario] = useState(null);
+  const [scenarioError, setScenarioError] = useState("");
+  const [scenarioBusy, setScenarioBusy] = useState(false);
   const nav = useNavigate();
   const data = overview.data;
+  const updateScenarioInput = (event) => setScenarioInputs((current) => ({
+    ...current, [event.target.name]: event.target.value,
+  }));
+  const runScenario = async (event) => {
+    event.preventDefault();
+    setScenarioError("");
+    setScenarioBusy(true);
+    try {
+      const payload = Object.fromEntries(Object.entries(scenarioInputs).map(([key, value]) => [key, Number(value || 0)]));
+      const { data: result } = await api.post("/planning/scenario", payload);
+      setScenario(result);
+    } catch (error) {
+      setScenarioError(apiError(error));
+    } finally {
+      setScenarioBusy(false);
+    }
+  };
 
   return (
     <>
@@ -102,6 +127,35 @@ export default function Planner() {
               )}
             </Card>
 
+            <Card className="mt-6 p-5">
+              <div>
+                <h2 className="font-display font-semibold text-ink">What-if property scenario</h2>
+                <p className="mt-1 text-xs text-subink">Explore a purchase, loan and rent delay without changing accounts, assets, debts, or forecasts.</p>
+              </div>
+              <form className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" onSubmit={runScenario}>
+                <ScenarioField label="Purchase price (₹)" name="purchase_price" value={scenarioInputs.purchase_price} onChange={updateScenarioInput} required />
+                <ScenarioField label="Down payment (₹)" name="down_payment" value={scenarioInputs.down_payment} onChange={updateScenarioInput} />
+                <ScenarioField label="Loan amount (₹)" name="loan_amount" value={scenarioInputs.loan_amount} onChange={updateScenarioInput} />
+                <ScenarioField label="Loan rate (% yearly)" name="annual_interest_rate" value={scenarioInputs.annual_interest_rate} onChange={updateScenarioInput} />
+                <ScenarioField label="Loan term (months)" name="loan_term_months" value={scenarioInputs.loan_term_months} onChange={updateScenarioInput} />
+                <ScenarioField label="Expected rent / month (₹)" name="monthly_rent" value={scenarioInputs.monthly_rent} onChange={updateScenarioInput} />
+                <ScenarioField label="Rent delay (months)" name="rent_delay_months" value={scenarioInputs.rent_delay_months} onChange={updateScenarioInput} />
+                <ScenarioField label="Other net cash change / month (₹)" name="monthly_net_surplus" value={scenarioInputs.monthly_net_surplus} onChange={updateScenarioInput} />
+                <div className="sm:col-span-2 xl:col-span-4 flex flex-wrap items-center gap-3">
+                  <Button type="submit" disabled={scenarioBusy || !scenarioInputs.purchase_price}>{scenarioBusy ? "Calculating…" : "Run hypothetical"}</Button>
+                  {scenarioError && <p role="alert" className="text-sm text-expense">{scenarioError}</p>}
+                </div>
+              </form>
+              {scenario && <div className="mt-5 border-t border-line pt-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div><Badge tone={scenario.cash_remains_nonnegative ? "green" : "amber"}>Hypothetical only</Badge><p className="mt-2 text-sm text-subink">Estimated loan payment {inr(scenario.estimated_monthly_payment)} / month · immediate cash needed {inr(scenario.immediate_cash_required)}</p></div>
+                  <div><p className="overline text-faint">Lowest projected cash</p><p className={`num mt-1 text-lg font-bold ${scenario.cash_remains_nonnegative ? "text-ink" : "text-expense"}`}>{inr(scenario.minimum_projected_cash)}</p><p className="text-xs text-subink">Month {scenario.minimum_projected_cash_month}</p></div>
+                </div>
+                <div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="text-left text-faint"><th className="py-2">Month</th><th className="py-2 text-right">Baseline cash</th><th className="py-2 text-right">Purchase scenario</th></tr></thead><tbody>{scenario.scenario.filter((point) => [0, 3, 6, 9, 12].includes(point.month)).map((point) => <tr key={point.month} className="border-t border-line"><td className="py-2">{point.month}</td><td className="num py-2 text-right">{inr(scenario.baseline.find((item) => item.month === point.month)?.balance)}</td><td className="num py-2 text-right font-semibold">{inr(point.balance)}</td></tr>)}</tbody></table></div>
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-[11px] text-faint">{scenario.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul>
+              </div>}
+            </Card>
+
             <div className="mt-6 grid gap-6 xl:grid-cols-2">
               <List title="30-day calendar" subtitle="Expected obligations and collections." rows={data.calendar} onClick={(item) => nav(item.path)} event />
               <List title="Money timeline" subtitle="Recently recorded transactions." rows={data.timeline} onClick={(item) => nav(item.type === "INCOME" ? "/income" : item.type === "EXPENSE" ? "/expenses" : "/cash-flow")} />
@@ -111,6 +165,10 @@ export default function Planner() {
       </StateBlock>
     </>
   );
+}
+
+function ScenarioField({ label, name, value, onChange, required = false }) {
+  return <Field label={label}><Input type="number" name={name} value={value} min={name === "monthly_net_surplus" ? undefined : "0"} step="0.01" required={required} onChange={onChange} /></Field>;
 }
 
 function List({ title, subtitle, rows, onClick, event }) {

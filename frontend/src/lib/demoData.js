@@ -502,6 +502,48 @@ function isDemoActionVisible(item, today) {
   return state?.status !== "RESOLVED" && !(state?.status === "SNOOZED" && state.snoozed_until >= today);
 }
 
+function demoPosition(record, category, amount, side = "asset", sourceDefault = null) {
+  const ownership = record.ownership_percent == null ? 100 : Number(record.ownership_percent);
+  const source = record.valuation_source || record.balance_source || record.record_source
+    || (record.source_document || record.source_import_id ? "IMPORT" : sourceDefault)
+    || "Not recorded";
+  const asOf = String(record.valuation_date || record.last_reconciled_at || record.balance_updated_at || "").slice(0, 10) || null;
+  const parsedDate = asOf ? new Date(`${asOf}T00:00:00`).getTime() : NaN;
+  const age = Number.isFinite(parsedDate) ? Math.max(0, Math.floor((Date.now() - parsedDate) / 86400000)) : null;
+  const confidence = ["manual", "manual estimate", "estimate"].includes(String(source).toLowerCase())
+    ? "ESTIMATE" : age == null || source === "Not recorded" ? "INCOMPLETE" : "RECORDED";
+  return {
+    id: record.id || "",
+    name: record.name || record.institution || record.policy_name || record.counterparty || category,
+    category, side, owner: record.owner || "Self",
+    ownership_percent: ownership,
+    gross_value: Math.abs(Number(amount) || 0),
+    owned_value: Math.round(Math.abs(Number(amount) || 0) * ownership) / 100,
+    source, as_of: asOf, age_days: age, confidence,
+    last_updated: record.updated_at || record.created_at || null,
+  };
+}
+
+function demoNetWorthPositions() {
+  const positions = [];
+  data.accounts.forEach((account) => {
+    const balance = Number(account.current_balance || 0);
+    positions.push(demoPosition(account, account.type === "CASH" ? "cash" : "bank", balance, balance < 0 ? "liability" : "asset", "Live demo ledger"));
+  });
+  data.savings.forEach((item) => positions.push(demoPosition(item, "savings", item.current_value)));
+  data.pfPpf.forEach((item) => positions.push(demoPosition(item, "pf_ppf", item.current_balance)));
+  data.investments.forEach((item) => positions.push(demoPosition(item, "investments", item.current_value)));
+  data.assets.forEach((item) => positions.push(demoPosition(item, "property", item.current_value)));
+  data.liabilities.forEach((item) => positions.push(demoPosition(item, "other_liabilities", item.outstanding, "liability")));
+  data.loans.forEach((item) => positions.push(demoPosition(item, "loans", item.outstanding, "liability")));
+  data.lending.forEach((item) => {
+    const outstanding = Math.max(0, Number(item.amount || 0) - (item.repayments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+    const borrowed = item.direction === "BORROWED";
+    positions.push(demoPosition(item, borrowed ? "borrowings" : "receivables", outstanding, borrowed ? "liability" : "asset"));
+  });
+  return positions;
+}
+
 function currentNetWorth() {
   const result = clone(netWorth);
   const total = (items, field) => items.reduce((sum, item) => sum + Number(item[field] || 0), 0);
@@ -544,6 +586,7 @@ function currentNetWorth() {
   result.breakdown.receivables += lendingDelta;
   result.liability_breakdown.loans += loanDelta + otherLiabilityDelta;
   result.liability_breakdown.borrowings += borrowingDelta;
+  result.positions = demoNetWorthPositions();
   result.allocation = result.allocation.map((item) => ({
     ...item,
     value: item.name === "Bank" ? item.value + bankDelta
@@ -1003,6 +1046,18 @@ function responseForGet(path, query) {
   if (path === "/rental/summary") return rentalSummary();
   if (path === "/farms/summary") return farmsSummary();
   if (path === "/networth/history") return clone(netWorthHistory);
+  const investmentHistory = path.match(/^\/investments\/([^/]+)\/(activity|valuations|performance)$/);
+  if (investmentHistory) {
+    const investment = data.investments.find((item) => item.id === investmentHistory[1]);
+    const section = investmentHistory[2];
+    if (section === "performance") return {
+      status: "UNAVAILABLE",
+      xirr: null,
+      reason: "Illustrative demo history is not used to claim an investment return. Add dated activity and valuations in a signed-in workspace.",
+      cash_flow_count: investment?.activity?.length || 0,
+    };
+    return clone(investment?.[section === "activity" ? "activity" : "valuations"] || []);
+  }
   if (path === "/recurring") return clone(recurringOverview());
   if (path === "/calendar") {
     const year = Number(query.get("year")) || new Date().getFullYear();
@@ -1088,9 +1143,30 @@ function responseForGet(path, query) {
   if (path === "/data-quality") {
     const uncategorized = data.transactions.filter((item) =>
       ["INCOME", "EXPENSE"].includes(item.type) && item.transaction_status !== "VOID"
-      && !(item.type === "EXPENSE" ? item.category : item.source)
+      && (!(item.type === "EXPENSE" ? item.category : item.source)
+        || ["uncategorized", "imported statement"].includes(String(item.type === "EXPENSE" ? item.category : item.source).toLowerCase()))
     );
-    return { generated_at: new Date().toISOString(), thresholds: { imported_balance_stale_days: 30, reconciliation_due_days: 90 }, counts: { stale_imported_balances: 0, reconciliation_due: 0, reconciliation_variances: 0, uncategorized_transactions: uncategorized.length, unassigned_transactions: 0 }, total_issues: uncategorized.length, findings: uncategorized.slice(0, 100).map((item) => ({ id: `uncategorized:${item.id}`, kind: "UNCATEGORIZED_TRANSACTION", severity: "LOW", title: `Uncategorized ${item.type.toLowerCase()}`, detail: `${item.date} · ${item.description || "Add a category or source."}`, path: item.type === "EXPENSE" ? "/expenses" : "/income", record_id: item.id, amount: item.amount })), truncated: uncategorized.length > 100 };
+    const valuationPositions = demoNetWorthPositions().filter((item) => !["bank", "cash"].includes(item.category));
+    const missingValuations = valuationPositions.filter((item) => item.source === "Not recorded" || !item.as_of);
+    const estimatedValuations = valuationPositions.filter((item) => item.confidence === "ESTIMATE");
+    const staleValuations = valuationPositions.filter((item) => item.age_days != null && item.age_days >= 365);
+    const findings = [
+      ...uncategorized.map((item) => ({ id: `uncategorized:${item.id}`, kind: "UNCATEGORIZED_TRANSACTION", severity: "LOW", title: `Uncategorized ${item.type.toLowerCase()}`, detail: `${item.date} · ${item.description || "Add a category or source."}`, path: item.type === "EXPENSE" ? "/expenses" : "/income", record_id: item.id, amount: item.amount })),
+      ...missingValuations.map((item) => ({ id: `valuation-details:${item.category}:${item.id}`, kind: "MISSING_VALUATION_DETAILS", severity: "MEDIUM", title: `Missing source or date · ${item.name}`, detail: "This illustrative demo value has no valuation source and date.", path: item.category === "investment" ? "/savings" : "/net-worth", record_id: item.id })),
+      ...estimatedValuations.map((item) => ({ id: `estimated-valuation:${item.id}`, kind: "ESTIMATED_VALUATION", severity: "LOW", title: `Estimated value · ${item.name}`, detail: "This value is marked as a manual estimate.", path: "/net-worth", record_id: item.id, amount: item.gross_value })),
+      ...staleValuations.map((item) => ({ id: `stale-valuation:${item.id}`, kind: "STALE_VALUATION", severity: "MEDIUM", title: `Value may be out of date · ${item.name}`, detail: `The recorded valuation is ${item.age_days} days old.`, path: "/net-worth", record_id: item.id, age_days: item.age_days, amount: item.gross_value })),
+    ];
+    return {
+      generated_at: new Date().toISOString(),
+      thresholds: { imported_balance_stale_days: 30, reconciliation_due_days: 90, valuation_stale_days: 365 },
+      counts: {
+        stale_imported_balances: 0, reconciliation_due: 0, reconciliation_variances: 0,
+        uncategorized_transactions: uncategorized.length, unassigned_transactions: 0,
+        positions_missing_valuation_details: missingValuations.length,
+        estimated_valuations: estimatedValuations.length, stale_valuations: staleValuations.length,
+      },
+      total_issues: findings.length, findings: findings.slice(0, 100), truncated: findings.length > 100,
+    };
   }
   if (path === "/budgets") return budgetOverview(query.get("month") || monthKey());
   const reconciliationHistory = path.match(/^\/accounts\/([^/]+)\/reconciliations$/);
@@ -1235,6 +1311,77 @@ function applyTransactionBalance(transaction, multiplier) {
 
 function mutate(config, path, method) {
   const body = typeof config.data === "string" ? (() => { try { return JSON.parse(config.data); } catch (_) { return {}; } })() : (config.data || {});
+  if (method === "post" && path === "/planning/scenario") {
+    const price = Number(body.purchase_price);
+    const loan = Number(body.loan_amount || 0);
+    const down = Number(body.down_payment || 0);
+    const rate = Number(body.annual_interest_rate || 0);
+    const term = Number(body.loan_term_months || 240);
+    const rent = Number(body.monthly_rent || 0);
+    const delay = Number(body.rent_delay_months || 0);
+    const surplus = Number(body.monthly_net_surplus || 0);
+    if ([price, loan, down, rate, term, rent, delay, surplus].some((value) => !Number.isFinite(value))
+      || !(price > 0) || loan < 0 || down < 0 || rent < 0 || rate < 0 || rate > 100
+      || !Number.isInteger(term) || term < 1 || term > 480
+      || !Number.isInteger(delay) || delay < 0 || delay > 24
+      || (loan > 0 || down > 0) && Math.abs(loan + down - price) > 0.01) {
+      throw new Error("Enter a purchase price and financing terms that add up to the purchase price.");
+    }
+    const monthlyRate = rate / 1200;
+    const monthlyPayment = loan <= 0 ? 0 : monthlyRate === 0 ? loan / term : loan * monthlyRate / (1 - (1 + monthlyRate) ** -term);
+    const startingCash = data.accounts.reduce((sum, account) => sum + Number(account.current_balance || 0), 0);
+    const base = [], projected = [];
+    let baseline = startingCash, scenario = startingCash - (price - loan), minimum = scenario, minimumMonth = 0;
+    for (let month = 0; month <= 12; month += 1) {
+      if (month) {
+        baseline += surplus;
+        scenario += surplus;
+        if (month <= term) scenario -= monthlyPayment;
+        if (month > delay) scenario += rent;
+      }
+      baseline = Math.round(baseline * 100) / 100;
+      scenario = Math.round(scenario * 100) / 100;
+      base.push({ month, balance: baseline });
+      projected.push({ month, balance: scenario });
+      if (scenario < minimum) { minimum = scenario; minimumMonth = month; }
+    }
+    return {
+      status: "HYPOTHETICAL", starting_cash: startingCash,
+      immediate_cash_required: price - loan,
+      estimated_monthly_payment: Math.round(monthlyPayment * 100) / 100,
+      minimum_projected_cash: minimum, minimum_projected_cash_month: minimumMonth,
+      cash_remains_nonnegative: minimum >= 0, baseline: base, scenario: projected,
+      assumptions: [
+        "Demo figures are illustrative; no ledger, asset or liability records were changed.",
+        "Existing scheduled commitments, taxes, purchase fees, maintenance, vacancy and changing rates are excluded.",
+      ],
+    };
+  }
+  if (method === "post" && path === "/imports/analyze") {
+    throw new Error("Statement import is not available in demo mode. Sign in to review and approve imports in a real workspace.");
+  }
+  const investmentActivityPath = path.match(/^\/investments\/([^/]+)\/(activity|valuations)$/);
+  if (method === "post" && investmentActivityPath) {
+    const investment = data.investments.find((item) => item.id === investmentActivityPath[1]);
+    if (!investment) throw new Error("Investment not found");
+    if (investmentActivityPath[2] === "activity") {
+      investment.activity = investment.activity || [];
+      const entry = { id: `demo-activity-${Date.now()}`, ...body };
+      investment.activity.unshift(entry);
+      return clone(entry);
+    }
+    investment.valuations = investment.valuations || [];
+    const currentDate = investment.valuation_date || "";
+    const isCurrent = !currentDate || body.date >= currentDate;
+    const entry = { id: `demo-valuation-${Date.now()}`, ...body, current_position_updated: isCurrent };
+    investment.valuations.unshift(entry);
+    if (isCurrent) {
+      investment.current_value = Number(body.current_value);
+      investment.valuation_date = body.date;
+      investment.valuation_source = body.source;
+    }
+    return clone(entry);
+  }
   const planningAction = path.match(/^\/planning\/actions\/([^/]+)$/);
   if (method === "post" && planningAction) {
     const action = String(body.action || "resolve").toLowerCase();

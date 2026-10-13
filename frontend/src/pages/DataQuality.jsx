@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, AlertTriangle, CheckCircle2, RefreshCw, Tags, Wallet } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, RefreshCw, Tags, Wallet, CalendarClock, PencilRuler } from "lucide-react";
 import { Badge, Button, Card, PageHeader, StateBlock } from "../components/ui";
 import { useFetch } from "../lib/useFetch";
 import { fmtDate, inr } from "../lib/format";
@@ -12,6 +12,9 @@ const ICONS = {
   STALE_IMPORTED_BALANCE: Wallet,
   UNCATEGORIZED_TRANSACTION: Tags,
   UNASSIGNED_TRANSACTION: Wallet,
+  MISSING_VALUATION_DETAILS: AlertTriangle,
+  ESTIMATED_VALUATION: PencilRuler,
+  STALE_VALUATION: CalendarClock,
 };
 
 export default function DataQuality() {
@@ -23,6 +26,9 @@ export default function DataQuality() {
     { label: "Checks due", value: counts.reconciliation_due || 0, tone: "text-amber" },
     { label: "Uncategorized", value: counts.uncategorized_transactions || 0, tone: "text-brand" },
     { label: "Unassigned accounts", value: counts.unassigned_transactions || 0, tone: "text-subink" },
+    { label: "Missing value details", value: counts.positions_missing_valuation_details || 0, tone: "text-amber" },
+    { label: "Estimated values", value: counts.estimated_valuations || 0, tone: "text-brand" },
+    { label: "Stale valuations", value: counts.stale_valuations || 0, tone: "text-expense" },
   ];
   return <>
     <PageHeader title="Data Quality" subtitle="Find stale, incomplete, or inconsistent financial records and jump to a place to review each one." icon={Activity}
@@ -34,8 +40,8 @@ export default function DataQuality() {
             <div><div className="flex items-center gap-2"><h2 className="font-display text-lg font-bold text-ink">Workspace data check</h2><Badge tone={data.total_issues ? "amber" : "green"}>{data.total_issues ? `${data.total_issues} findings` : "Looks good"}</Badge></div><p className="mt-1 text-xs text-subink">Generated {fmtDate(data.generated_at)}. Checks flag records for review; they never adjust balances automatically.</p></div>
             {!data.total_issues && <CheckCircle2 className="text-income" size={25} />}
           </div>
-          <div className="mt-5 grid grid-cols-2 xl:grid-cols-4 gap-3">{tiles.map((tile) => <div key={tile.label} className="rounded-xl bg-muted/60 p-3"><p className="overline text-faint">{tile.label}</p><p className={`num mt-1 text-2xl font-extrabold ${tile.tone}`}>{tile.value}</p></div>)}</div>
-          <p className="mt-4 text-[11px] text-subink">Imported balances are flagged after {data.thresholds.imported_balance_stale_days} days without a source update. Account reconciliations are due after {data.thresholds.reconciliation_due_days} days.</p>
+          <div className="mt-5 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">{tiles.map((tile) => <div key={tile.label} className="rounded-xl bg-muted/60 p-3"><p className="overline text-faint">{tile.label}</p><p className={`num mt-1 text-2xl font-extrabold ${tile.tone}`}>{tile.value}</p></div>)}</div>
+          <p className="mt-4 text-[11px] text-subink">Imported balances are flagged after {data.thresholds.imported_balance_stale_days} days without a source update. Account reconciliations are due after {data.thresholds.reconciliation_due_days} days; valuations after {data.thresholds.valuation_stale_days} days.</p>
         </Card>
         <Card className="overflow-hidden">
           <div className="border-b border-line px-5 py-4"><h2 className="font-display font-semibold text-ink">Items to review</h2><p className="mt-1 text-xs text-subink">Highest-impact checks appear first.</p></div>

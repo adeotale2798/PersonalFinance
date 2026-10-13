@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from bson import ObjectId
@@ -114,6 +114,11 @@ def test_create_audits_schedule_and_overview_keeps_projections_off_ledger(monkey
     account_id = ObjectId()
     schedule_id = ObjectId()
     today = date(2026, 10, 6)
+    monkeypatch.setattr(
+        api_recurring,
+        "now_utc",
+        lambda: datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+    )
     schedule = {
         "_id": schedule_id,
         "name": "Music",

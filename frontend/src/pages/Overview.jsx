@@ -103,7 +103,7 @@ export default function Overview() {
       </section>}
 
       {!quality.loading && !quality.error && quality.data?.total_issues > 0 && <button type="button" onClick={() => nav("/data-quality")} className="w-full rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-pop">
-        <span className="flex flex-wrap items-center justify-between gap-3"><span><span className="block text-sm font-bold text-ink">{quality.data.total_issues} financial data-quality checks need review</span><span className="mt-1 block text-xs text-subink">{quality.data.counts.reconciliation_variances || 0} statement differences · {quality.data.counts.uncategorized_transactions || 0} uncategorized · {quality.data.counts.stale_imported_balances || 0} stale imported balances</span></span><span className="inline-flex items-center gap-1 text-xs font-bold text-brand">Review checks <ArrowRight size={14} /></span></span>
+        <span className="flex flex-wrap items-center justify-between gap-3"><span><span className="block text-sm font-bold text-ink">{quality.data.total_issues} financial data-quality checks need review</span><span className="mt-1 block text-xs text-subink">{quality.data.counts.reconciliation_variances || 0} statement differences · {quality.data.counts.positions_missing_valuation_details || 0} positions missing source/date · {quality.data.counts.estimated_valuations || 0} estimates · {quality.data.counts.stale_valuations || 0} stale valuations</span></span><span className="inline-flex items-center gap-1 text-xs font-bold text-brand">Review checks <ArrowRight size={14} /></span></span>
       </button>}
 
       <section className="grid xl:grid-cols-12 gap-4 sm:gap-5">

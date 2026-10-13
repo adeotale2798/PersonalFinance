@@ -104,7 +104,12 @@ export default function NetWorth() {
                         <td className="px-4 py-3 num">{position.ownership_percent}%</td>
                         <td className="px-4 py-3 num">{inr(position.gross_value)}</td>
                         <td className="px-4 py-3 num font-semibold">{position.side === "liability" ? "−" : ""}{inr(position.owned_value)}</td>
-                        <td className="px-4 py-3 text-xs text-subink whitespace-nowrap">{position.source} · {position.as_of ? fmtDate(position.as_of) : "date not recorded"}</td>
+                        <td className="px-4 py-3 text-xs text-subink whitespace-nowrap">
+                          <span>{position.source} · {position.as_of ? fmtDate(position.as_of) : "date not recorded"}</span>
+                          <span className="block mt-1">
+                            {position.confidence === "ESTIMATE" ? "Estimate" : position.confidence === "INCOMPLETE" ? "Source or date missing" : position.age_days >= 365 ? `Possibly stale · ${position.age_days} days` : "Recorded"}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
